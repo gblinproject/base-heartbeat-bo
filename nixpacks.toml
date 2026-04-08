@@ -9,4 +9,4 @@ cmds = []
 
 [start]
 cmd = "node /app/dist/index.mjs"
-# cache-bust: 20260408T181101
+# bust: 20260408T183223
