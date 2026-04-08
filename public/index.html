@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Base Heartbeat Bot</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0a0a0f; color: #e2e8f0; font-family: 'SF Mono', 'Fira Code', monospace; padding: 24px; }
+    h1 { font-size: 1.1rem; color: #7c3aed; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 4px; }
+    .subtitle { font-size: 0.72rem; color: #4b5563; margin-bottom: 28px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 24px; }
+    .card { background: #111827; border: 1px solid #1f2937; border-radius: 10px; padding: 18px; }
+    .card-title { font-size: 0.65rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; }
+    .card-value { font-size: 1.5rem; font-weight: 700; color: #f9fafb; }
+    .card-sub { font-size: 0.72rem; color: #6b7280; margin-top: 4px; }
+    .badge { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 0.68rem; font-weight: 600; }
+    .badge.running { background: #064e3b; color: #34d399; }
+    .badge.waiting { background: #1c1917; color: #d97706; }
+    .badge.stopped { background: #1f1111; color: #f87171; }
+    .wallets { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 24px; }
+    .wallet { background: #111827; border: 1px solid #1f2937; border-radius: 8px; padding: 14px; }
+    .wallet-addr { font-size: 0.65rem; color: #6b7280; margin-bottom: 6px; }
+    .wallet-eth { font-size: 1rem; font-weight: 700; color: #60a5fa; }
+    .wallet-usd { font-size: 0.72rem; color: #6b7280; }
+    .trades { background: #111827; border: 1px solid #1f2937; border-radius: 10px; padding: 18px; }
+    .trades-title { font-size: 0.65rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 14px; }
+    .trade-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #1f2937; font-size: 0.75rem; }
+    .trade-row:last-child { border-bottom: none; }
+    .buy { color: #34d399; }
+    .sell { color: #f87171; }
+    .skip { color: #6b7280; }
+    .trade-ts { color: #4b5563; font-size: 0.65rem; }
+    .next { font-size: 0.75rem; color: #9ca3af; margin-top: 4px; }
+    .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #34d399; margin-right: 6px; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+    .err { color: #f87171; font-size: 0.75rem; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h1><span class="dot"></span>Base Heartbeat Bot</h1>
+  <p class="subtitle" id="subtitle">caricamento...</p>
+
+  <div class="grid" id="stats">
+    <div class="card"><div class="card-title">Stato</div><div class="card-value" id="stat-status">—</div></div>
+    <div class="card"><div class="card-title">Capitale totale</div><div class="card-value" id="stat-usd">—</div><div class="card-sub" id="stat-eth"></div></div>
+    <div class="card"><div class="card-title">Prossimo trade</div><div class="card-value" id="stat-next">—</div><div class="card-sub" id="stat-zone"></div></div>
+    <div class="card"><div class="card-title">Ultimo trade</div><div class="card-value" id="stat-last">—</div><div class="card-sub" id="stat-lastsub"></div></div>
+  </div>
+
+  <div class="wallets" id="wallets"></div>
+
+  <div class="trades">
+    <div class="trades-title">Ultimi trade</div>
+    <div id="trade-list"><div style="color:#4b5563;font-size:0.75rem">caricamento...</div></div>
+  </div>
+
+  <div class="err" id="err"></div>
+
+  <script>
+    const BASE = window.location.origin;
+
+    function fmt(ts) {
+      const d = new Date(ts);
+      return d.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }) + ' ' +
+             d.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' });
+    }
+    function fmtMins(sec) {
+      if (sec < 60) return sec + 's';
+      return Math.round(sec / 60) + ' min';
+    }
+
+    async function load() {
+      try {
+        const [s, m] = await Promise.all([
+          fetch(BASE + '/api/bot/status').then(r => r.json()),
+          fetch(BASE + '/api/bot/metrics').then(r => r.json()),
+        ]);
+
+        document.getElementById('subtitle').textContent =
+          'Token: 0x38Dc…6345  •  ETH $' + (s.market?.ethPriceUsd?.toFixed(0) ?? '—') + '  •  4 wallet su Base Mainnet';
+
+        const statusEl = document.getElementById('stat-status');
+        const badge = s.status === 'running' ? 'running' : s.status === 'waiting' ? 'waiting' : 'stopped';
+        const label = s.status === 'running' ? 'ATTIVO' : s.status === 'waiting' ? 'ATTESA FONDI' : s.status.toUpperCase();
+        statusEl.innerHTML = '<span class="badge ' + badge + '">' + label + '</span>';
+
+        const totalUsd = s.wallets?.reduce((a, w) => a + (w.usdBalance || 0), 0) ?? 0;
+        const totalEth = s.wallets?.reduce((a, w) => a + (w.ethBalance || 0), 0) ?? 0;
+        document.getElementById('stat-usd').textContent = '$' + totalUsd.toFixed(2);
+        document.getElementById('stat-eth').textContent = totalEth.toFixed(6) + ' ETH';
+
+        const nextSec = s.heartbeat?.nextIntervalSec ?? 0;
+        document.getElementById('stat-next').textContent = fmtMins(nextSec);
+        document.getElementById('stat-zone').textContent = 'zona: ' + (s.heartbeat?.zone ?? '—');
+
+        const lt = s.lastTrade;
+        if (lt) {
+          const cls = lt.type === 'buy' ? 'buy' : lt.type === 'sell' ? 'sell' : 'skip';
+          document.getElementById('stat-last').innerHTML = '<span class="' + cls + '">' + lt.type.toUpperCase() + ' $' + (lt.usdAmount?.toFixed(3) ?? '—') + '</span>';
+          document.getElementById('stat-lastsub').textContent = fmt(lt.timestamp);
+        }
+
+        const walletsEl = document.getElementById('wallets');
+        walletsEl.innerHTML = (s.wallets ?? []).map(w =>
+          '<div class="wallet">' +
+          '<div class="wallet-addr">W' + w.index + ' · ' + w.address.slice(0, 6) + '…' + w.address.slice(-4) + '</div>' +
+          '<div class="wallet-eth">' + (w.ethBalance ?? 0).toFixed(5) + ' ETH</div>' +
+          '<div class="wallet-usd">$' + (w.usdBalance ?? 0).toFixed(2) + '</div>' +
+          '</div>'
+        ).join('');
+
+        const trades = s.recentTrades ?? [];
+        document.getElementById('trade-list').innerHTML = trades.length === 0
+          ? '<div style="color:#4b5563;font-size:0.75rem">Nessun trade ancora</div>'
+          : trades.slice(0, 15).map(t => {
+              const cls = t.type === 'buy' ? 'buy' : t.type === 'sell' ? 'sell' : 'skip';
+              const w = 'W' + (t.walletIndex ?? '?');
+              const amt = t.usdAmount ? '$' + t.usdAmount.toFixed(3) : '';
+              return '<div class="trade-row"><span class="' + cls + '">' + t.type.toUpperCase() + '</span><span>' + w + ' ' + amt + '</span><span class="trade-ts">' + fmt(t.timestamp) + '</span></div>';
+            }).join('');
+
+        document.getElementById('err').textContent = '';
+      } catch(e) {
+        document.getElementById('err').textContent = 'Errore connessione API: ' + e.message;
+      }
+    }
+
+    load();
+    setInterval(load, 15000);
+  </script>
+</body>
+</html>
