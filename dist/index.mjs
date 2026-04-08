@@ -51718,8 +51718,8 @@ router2.get("/bot/status", (_req, res) => {
     },
     heartbeat: {
       targetToken: "0x38DcDB3A381677239BBc652aed9811F2f8496345",
-      buyAmountRangeUsd: { min: 0.01, max: 0.05 },
-      sellAmountRange: "40\u201360% of token holdings",
+      buyAmountRangeUsd: { min: 0.02, max: 0.1 },
+      sellAmountRange: "15\u201385% of token holdings",
       sellProbability: "40% base (25\u201355% dynamic)",
       intervalRangeMin: { night: "40\u2013120", peak: "8\u201320", normal: "20\u201360" },
       nextTradeAt: state2.nextTradeAt,
