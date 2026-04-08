@@ -51015,11 +51015,11 @@ var FUNDED_THRESHOLD_USD = 15;
 var POLLING_INTERVAL_MS = 60 * 1e3;
 var SELL_COOLDOWN_MS = 18 * 60 * 1e3;
 var BUY_PRESETS = [
-  { amount: 0.02, weight: 0.2 },
-  { amount: 0.04, weight: 0.35 },
-  { amount: 0.06, weight: 0.28 },
-  { amount: 0.08, weight: 0.12 },
-  { amount: 0.1, weight: 0.05 }
+  { amount: 0.01, weight: 0.2 },
+  { amount: 0.02, weight: 0.35 },
+  { amount: 0.03, weight: 0.28 },
+  { amount: 0.04, weight: 0.12 },
+  { amount: 0.05, weight: 0.05 }
 ];
 var WALLET_WEIGHTS2 = [0.35, 0.3, 0.2, 0.15];
 var MIN_ETH_FOR_SELL = 5e-4;
@@ -51127,14 +51127,14 @@ function getIntervalMs() {
   let minMs;
   let maxMs;
   if (isNight) {
-    minMs = 40 * 6e4;
-    maxMs = 120 * 6e4;
-  } else if (isPeak) {
-    minMs = 8 * 6e4;
-    maxMs = 20 * 6e4;
-  } else {
     minMs = 20 * 6e4;
     maxMs = 60 * 6e4;
+  } else if (isPeak) {
+    minMs = 4 * 6e4;
+    maxMs = 10 * 6e4;
+  } else {
+    minMs = 10 * 6e4;
+    maxMs = 30 * 6e4;
   }
   if (isWeekend) {
     minMs = Math.round(minMs * 1.5);
@@ -51169,8 +51169,8 @@ function selectBuyAmountUsd() {
       break;
     }
   }
-  const noise = (Math.random() - 0.5) * 0.016;
-  return Math.max(0.015, Math.min(0.115, base2 + noise));
+  const noise = (Math.random() - 0.5) * 8e-3;
+  return Math.max(8e-3, Math.min(0.058, base2 + noise));
 }
 async function applyJitter(manual = false) {
   if (manual) return;
@@ -51718,10 +51718,10 @@ router2.get("/bot/status", (_req, res) => {
     },
     heartbeat: {
       targetToken: "0x38DcDB3A381677239BBc652aed9811F2f8496345",
-      buyAmountRangeUsd: { min: 0.02, max: 0.1 },
+      buyAmountRangeUsd: { min: 0.01, max: 0.05 },
       sellAmountRange: "15\u201385% of token holdings",
       sellProbability: "40% base (25\u201355% dynamic)",
-      intervalRangeMin: { night: "40\u2013120", peak: "8\u201320", normal: "20\u201360" },
+      intervalRangeMin: { night: "20\u201360", peak: "4\u201310", normal: "10\u201330" },
       nextTradeAt: state2.nextTradeAt,
       nextIntervalSec: state2.nextIntervalSec,
       totalTrades: state2.totalTrades,
