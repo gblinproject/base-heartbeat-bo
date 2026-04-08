@@ -14,4 +14,4 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
   CMD wget -qO- http://localhost:${PORT}/api/healthz || exit 1
 
-CMD ["node", "dist/index.mjs"]
+CMD ["node", "/app/dist/index.mjs"]
