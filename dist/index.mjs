@@ -51015,11 +51015,11 @@ var FUNDED_THRESHOLD_USD = 15;
 var POLLING_INTERVAL_MS = 60 * 1e3;
 var SELL_COOLDOWN_MS = 18 * 60 * 1e3;
 var BUY_PRESETS = [
-  { amount: 0.01, weight: 0.2 },
-  { amount: 0.02, weight: 0.35 },
-  { amount: 0.03, weight: 0.28 },
-  { amount: 0.04, weight: 0.12 },
-  { amount: 0.05, weight: 0.05 }
+  { amount: 0.02, weight: 0.2 },
+  { amount: 0.04, weight: 0.35 },
+  { amount: 0.06, weight: 0.28 },
+  { amount: 0.08, weight: 0.12 },
+  { amount: 0.1, weight: 0.05 }
 ];
 var WALLET_WEIGHTS2 = [0.35, 0.3, 0.2, 0.15];
 var MIN_ETH_FOR_SELL = 5e-4;
@@ -51169,8 +51169,8 @@ function selectBuyAmountUsd() {
       break;
     }
   }
-  const noise = (Math.random() - 0.5) * 8e-3;
-  return Math.max(8e-3, Math.min(0.058, base2 + noise));
+  const noise = (Math.random() - 0.5) * 0.016;
+  return Math.max(0.015, Math.min(0.115, base2 + noise));
 }
 async function applyJitter(manual = false) {
   if (manual) return;
