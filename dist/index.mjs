@@ -51531,21 +51531,38 @@ async function scheduleNextTrade() {
     "Next trade scheduled"
   );
   heartbeatTimeout = setTimeout(async () => {
+    state.nextTradeAt = null;
+    state.nextIntervalSec = null;
     if (!isRunning) return;
-    const ethPrice = await getEthPriceUsd();
-    state.ethPriceUsd = ethPrice;
-    await distributeFunds(ethPrice);
-    const record = await executeTrade(ethPrice);
-    prevEthPriceUsd = ethPrice;
-    state.lastTrade = record;
-    state.totalTrades += 1;
-    if (record.type === "buy") state.totalBuys += 1;
-    if (record.type === "sell") state.totalSells += 1;
-    state.recentTrades = [record, ...state.recentTrades].slice(0, 200);
-    persistTrades();
-    await refreshBalances(ethPrice);
-    scheduleNextTrade();
+    try {
+      const ethPrice = await getEthPriceUsd();
+      state.ethPriceUsd = ethPrice;
+      state.lastCheck = (/* @__PURE__ */ new Date()).toISOString();
+      await distributeFunds(ethPrice);
+      const record = await executeTrade(ethPrice);
+      prevEthPriceUsd = ethPrice;
+      state.lastTrade = record;
+      state.totalTrades += 1;
+      if (record.type === "buy") state.totalBuys += 1;
+      if (record.type === "sell") state.totalSells += 1;
+      state.recentTrades = [record, ...state.recentTrades].slice(0, 200);
+      persistTrades();
+      await refreshBalances(ethPrice);
+    } catch (err) {
+      logger.error({ err }, "Heartbeat cycle error \u2014 rescheduling anyway");
+    } finally {
+      scheduleNextTrade();
+    }
   }, intervalMs);
+}
+function startWatchdog() {
+  setInterval(() => {
+    if (!isRunning) return;
+    if (heartbeatTimeout !== null) return;
+    if (state.nextTradeAt !== null) return;
+    logger.warn("Watchdog: scheduler appears dead \u2014 restarting it");
+    scheduleNextTrade();
+  }, 5 * 6e4);
 }
 async function checkFunding() {
   try {
@@ -51605,6 +51622,8 @@ async function startBot() {
     if (state.status === "waiting_for_funds") {
       pollingTimer = setInterval(checkFunding, POLLING_INTERVAL_MS);
     }
+    startWatchdog();
+    logger.info("Watchdog started \u2014 scheduler will be auto-revived if it dies");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     state.status = "error";
