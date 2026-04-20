@@ -50469,6 +50469,7 @@ function http(url, config = {}) {
 
 // ../../node_modules/.pnpm/viem@2.47.10_typescript@5.9.3_zod@4.3.6/node_modules/viem/_esm/index.js
 init_encodeAbiParameters();
+init_encodeFunctionData();
 init_formatEther();
 init_formatUnits();
 
@@ -51002,12 +51003,12 @@ import { resolve as resolve2 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 var TOKEN_ADDRESS = "0x38DcDB3A381677239BBc652aed9811F2f8496345";
 var WETH_ADDRESS = "0x4200000000000000000000000000000000000006";
-var ROUTER = "0x6df1c91424f79e40e33b1a48f0687b666be71075";
+var BUY_ROUTER = "0x6ff5693b99212da76ad316178a184ab56d299b43";
+var SELL_ROUTER = "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1";
+var POOL_ADDRESS = "0x8fdDa852a7b106b08848da676b8793814D561617";
+var POOL_FEE = 300;
 var CMD_WRAP_ETH = 11;
 var CMD_V3_SWAP_EXACT_IN = 0;
-var CMD_UNWRAP_WETH = 12;
-var POOL_TYPE = 16;
-var TICK_SPACING = 200;
 var SELL_PROBABILITY_BASE = 0.4;
 var SELL_PCT_MIN = 0.15;
 var SELL_PCT_MAX = 0.85;
@@ -51023,7 +51024,7 @@ var BUY_PRESETS = [
 ];
 var WALLET_WEIGHTS2 = [0.35, 0.3, 0.2, 0.15];
 var MIN_ETH_FOR_SELL = 5e-4;
-var ROUTER_ABI = [
+var UNIVERSAL_ROUTER_ABI = [
   {
     name: "execute",
     type: "function",
@@ -51032,6 +51033,49 @@ var ROUTER_ABI = [
       { name: "commands", type: "bytes" },
       { name: "inputs", type: "bytes[]" },
       { name: "deadline", type: "uint256" }
+    ],
+    outputs: []
+  }
+];
+var SWAP_ROUTER_ABI = [
+  {
+    name: "exactInputSingle",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      {
+        name: "params",
+        type: "tuple",
+        components: [
+          { name: "tokenIn", type: "address" },
+          { name: "tokenOut", type: "address" },
+          { name: "fee", type: "uint24" },
+          { name: "recipient", type: "address" },
+          { name: "amountIn", type: "uint256" },
+          { name: "amountOutMinimum", type: "uint256" },
+          { name: "sqrtPriceLimitX96", type: "uint160" }
+        ]
+      }
+    ],
+    outputs: [{ name: "amountOut", type: "uint256" }]
+  },
+  {
+    name: "multicall",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "deadline", type: "uint256" },
+      { name: "data", type: "bytes[]" }
+    ],
+    outputs: [{ name: "", type: "bytes[]" }]
+  },
+  {
+    name: "unwrapWETH9",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "amountMinimum", type: "uint256" },
+      { name: "recipient", type: "address" }
     ],
     outputs: []
   }
@@ -51049,6 +51093,13 @@ var ERC20_ABI = [
     type: "function",
     stateMutability: "nonpayable",
     inputs: [{ name: "to", type: "address" }, { name: "amount", type: "uint256" }],
+    outputs: [{ name: "", type: "bool" }]
+  },
+  {
+    name: "approve",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }],
     outputs: [{ name: "", type: "bool" }]
   }
 ];
@@ -51213,15 +51264,31 @@ async function getTokenBalance(address) {
 }
 function buildBuyPath() {
   return encodePacked(
-    ["address", "uint8", "uint16", "address"],
-    [WETH_ADDRESS, POOL_TYPE, TICK_SPACING, TOKEN_ADDRESS]
+    ["address", "uint24", "address"],
+    [WETH_ADDRESS, POOL_FEE, TOKEN_ADDRESS]
   );
 }
-function buildSellPath() {
-  return encodePacked(
-    ["address", "uint8", "uint16", "address"],
-    [TOKEN_ADDRESS, POOL_TYPE, TICK_SPACING, WETH_ADDRESS]
-  );
+function encodeExactInputSingle(params) {
+  return encodeFunctionData({
+    abi: SWAP_ROUTER_ABI,
+    functionName: "exactInputSingle",
+    args: [{
+      tokenIn: params.tokenIn,
+      tokenOut: params.tokenOut,
+      fee: params.fee,
+      recipient: params.recipient,
+      amountIn: params.amountIn,
+      amountOutMinimum: params.amountOutMinimum,
+      sqrtPriceLimitX96: 0n
+    }]
+  });
+}
+function encodeUnwrapWETH9(recipient) {
+  return encodeFunctionData({
+    abi: SWAP_ROUTER_ABI,
+    functionName: "unwrapWETH9",
+    args: [0n, recipient]
+  });
 }
 async function executeBuy(wallet, ethPriceUsd, manual = false) {
   await applyJitter(manual);
@@ -51251,7 +51318,7 @@ async function executeBuy(wallet, ethPriceUsd, manual = false) {
     "Executing BUY..."
   );
   const path = buildBuyPath();
-  const wrapInput = encodeAbiParameters(parseAbiParameters("address, uint256"), [ROUTER, ethWei]);
+  const wrapInput = encodeAbiParameters(parseAbiParameters("address, uint256"), [BUY_ROUTER, ethWei]);
   const swapInput = encodeAbiParameters(
     parseAbiParameters("address, uint256, uint256, bytes, bool"),
     [wallet.address, ethWei, 0n, path, false]
@@ -51259,8 +51326,8 @@ async function executeBuy(wallet, ethPriceUsd, manual = false) {
   try {
     const gasPrice = await getVariedGasPrice();
     const hash3 = await wallet.walletClient.writeContract({
-      address: ROUTER,
-      abi: ROUTER_ABI,
+      address: BUY_ROUTER,
+      abi: UNIVERSAL_ROUTER_ABI,
       functionName: "execute",
       args: [
         `0x${CMD_WRAP_ETH.toString(16).padStart(2, "0")}${CMD_V3_SWAP_EXACT_IN.toString(16).padStart(2, "0")}`,
@@ -51338,48 +51405,44 @@ async function executeSell(wallet, ethPriceUsd, manual = false) {
       sellPct: (sellPct * 100).toFixed(1) + "%",
       sellAmount: record.tokenAmount
     },
-    "Executing SELL (transfer \u2192 swap)..."
+    "Executing SELL (approve \u2192 multicall swap+unwrap)..."
   );
   const deadline = BigInt(Math.floor(Date.now() / 1e3) + 300);
-  const path = buildSellPath();
   try {
-    logger.info({ wallet: wallet.address }, "Step 1: transferring TOKEN to router...");
-    const gasPrice = await getVariedGasPrice();
-    const transferHash = await wallet.walletClient.writeContract({
+    logger.info({ wallet: wallet.address }, "Step 1: approving SwapRouter02 for TOKEN...");
+    const approveGasPrice = await getVariedGasPrice();
+    const approveHash = await wallet.walletClient.writeContract({
       address: TOKEN_ADDRESS,
       abi: ERC20_ABI,
-      functionName: "transfer",
-      args: [ROUTER, sellAmount],
-      gasPrice
+      functionName: "approve",
+      args: [SELL_ROUTER, sellAmount],
+      gasPrice: approveGasPrice
     });
-    const transferReceipt = await publicClient.waitForTransactionReceipt({ hash: transferHash });
-    if (transferReceipt.status === "reverted") {
-      throw new Error(`TOKEN.transfer reverted (hash ${transferHash})`);
+    const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
+    if (approveReceipt.status === "reverted") {
+      throw new Error(`TOKEN.approve reverted (hash ${approveHash})`);
     }
-    logger.info({ transferHash }, "TOKEN transferred to router \u2705");
-    const { raw: routerTokenBal } = await getTokenBalance(ROUTER);
-    const swapAmountIn = routerTokenBal > 0n ? routerTokenBal : sellAmount;
-    logger.info({ swapAmountIn: formatUnits(swapAmountIn, TOKEN_DECIMALS) }, "Router balance to swap");
-    const commands = `0x${CMD_V3_SWAP_EXACT_IN.toString(16).padStart(2, "0")}${CMD_UNWRAP_WETH.toString(16).padStart(2, "0")}`;
-    const swapInput = encodeAbiParameters(
-      parseAbiParameters("address, uint256, uint256, bytes, bool"),
-      [ROUTER, swapAmountIn, 0n, path, false]
-    );
-    const unwrapInput = encodeAbiParameters(
-      parseAbiParameters("address, uint256"),
-      [wallet.address, 0n]
-    );
+    logger.info({ approveHash }, "Approval confirmed \u2705");
     await sleep(2e3);
-    logger.info({ wallet: wallet.address }, "Step 2: executing swap TOKEN\u2192ETH...");
+    logger.info({ wallet: wallet.address }, "Step 2: swap TOKEN\u2192ETH via multicall...");
+    const swapCalldata = encodeExactInputSingle({
+      tokenIn: TOKEN_ADDRESS,
+      tokenOut: WETH_ADDRESS,
+      fee: POOL_FEE,
+      recipient: SELL_ROUTER,
+      // SELL_ROUTER receives WETH, then unwraps to ETH
+      amountIn: sellAmount,
+      amountOutMinimum: 0n
+    });
+    const unwrapCalldata = encodeUnwrapWETH9(wallet.address);
     const swapGasPrice = await getVariedGasPrice();
     const swapHash = await wallet.walletClient.writeContract({
-      address: ROUTER,
-      abi: ROUTER_ABI,
-      functionName: "execute",
-      args: [commands, [swapInput, unwrapInput], deadline],
+      address: SELL_ROUTER,
+      abi: SWAP_ROUTER_ABI,
+      functionName: "multicall",
+      args: [deadline, [swapCalldata, unwrapCalldata]],
       value: 0n,
       gas: 400000n,
-      // pre-specify to bypass unreliable estimateGas
       gasPrice: swapGasPrice
     });
     await publicClient.waitForTransactionReceipt({ hash: swapHash });
@@ -51608,8 +51671,9 @@ async function startBot() {
         network: "Base Mainnet",
         threshold: `$${FUNDED_THRESHOLD_USD}`,
         token: TOKEN_ADDRESS,
-        pool: "0x17a4564dc380d4435a26648fe00da673645b60ce",
-        router: ROUTER,
+        pool: POOL_ADDRESS,
+        buyRouter: BUY_ROUTER,
+        sellRouter: SELL_ROUTER,
         buyPresets: BUY_PRESETS.map((p) => `$${p.amount}(${(p.weight * 100).toFixed(0)}%)`).join(" "),
         walletWeights: WALLET_WEIGHTS2.map((w, i) => `W${i}:${(w * 100).toFixed(0)}%`).join(" "),
         sellProbBase: (SELL_PROBABILITY_BASE * 100).toFixed(0) + "%",
