@@ -5133,7 +5133,7 @@ var require_lib = __commonJS({
     module.exports.encodings = null;
     module.exports.defaultCharUnicode = "\uFFFD";
     module.exports.defaultCharSingleByte = "?";
-    module.exports.encode = function encode5(str, encoding, options) {
+    module.exports.encode = function encode4(str, encoding, options) {
       str = "" + (str || "");
       var encoder5 = module.exports.getEncoder(encoding, options);
       var res = encoder5.write(str);
@@ -17548,7 +17548,7 @@ var require_utils2 = __commonJS({
       }
     };
     var limit = 1024;
-    var encode5 = function encode6(str, defaultEncoder, charset, kind, format) {
+    var encode4 = function encode5(str, defaultEncoder, charset, kind, format) {
       if (str.length === 0) {
         return str;
       }
@@ -17650,7 +17650,7 @@ var require_utils2 = __commonJS({
       combine,
       compact,
       decode: decode2,
-      encode: encode5,
+      encode: encode4,
       isBuffer,
       isOverflow,
       isRegExp,
@@ -19990,9 +19990,9 @@ var require_dist = __commonJS({
       return new TokenData(consumeUntil("end"), str);
     }
     function compile(path, options = {}) {
-      const { encode: encode5 = encodeURIComponent, delimiter = DEFAULT_DELIMITER } = options;
+      const { encode: encode4 = encodeURIComponent, delimiter = DEFAULT_DELIMITER } = options;
       const data = typeof path === "object" ? path : parse(path, options);
-      const fn = tokensToFunction(data.tokens, delimiter, encode5);
+      const fn = tokensToFunction(data.tokens, delimiter, encode4);
       return function path2(params = {}) {
         const [path3, ...missing] = fn(params);
         if (missing.length) {
@@ -20001,8 +20001,8 @@ var require_dist = __commonJS({
         return path3;
       };
     }
-    function tokensToFunction(tokens, delimiter, encode5) {
-      const encoders = tokens.map((token) => tokenToFunction(token, delimiter, encode5));
+    function tokensToFunction(tokens, delimiter, encode4) {
+      const encoders = tokens.map((token) => tokenToFunction(token, delimiter, encode4));
       return (data) => {
         const result = [""];
         for (const encoder5 of encoders) {
@@ -20013,11 +20013,11 @@ var require_dist = __commonJS({
         return result;
       };
     }
-    function tokenToFunction(token, delimiter, encode5) {
+    function tokenToFunction(token, delimiter, encode4) {
       if (token.type === "text")
         return () => [token.value];
       if (token.type === "group") {
-        const fn = tokensToFunction(token.tokens, delimiter, encode5);
+        const fn = tokensToFunction(token.tokens, delimiter, encode4);
         return (data) => {
           const [value, ...missing] = fn(data);
           if (!missing.length)
@@ -20025,8 +20025,8 @@ var require_dist = __commonJS({
           return [""];
         };
       }
-      const encodeValue = encode5 || NOOP_VALUE;
-      if (token.type === "wildcard" && encode5 !== false) {
+      const encodeValue = encode4 || NOOP_VALUE;
+      if (token.type === "wildcard" && encode4 !== false) {
         return (data) => {
           const value = data[token.name];
           if (value == null)
@@ -29468,7 +29468,7 @@ var init_base = __esm({
 });
 
 // ../../node_modules/.pnpm/viem@2.47.10_typescript@5.9.3_zod@4.3.6/node_modules/viem/_esm/errors/abi.js
-var AbiConstructorNotFoundError, AbiConstructorParamsNotFoundError, AbiDecodingDataSizeTooSmallError, AbiDecodingZeroDataError, AbiEncodingArrayLengthMismatchError, AbiEncodingBytesSizeMismatchError, AbiEncodingLengthMismatchError, AbiErrorInputsNotFoundError, AbiErrorNotFoundError, AbiErrorSignatureNotFoundError, AbiEventSignatureEmptyTopicsError, AbiEventSignatureNotFoundError, AbiEventNotFoundError, AbiFunctionNotFoundError, AbiFunctionOutputsNotFoundError, AbiFunctionSignatureNotFoundError, AbiItemAmbiguityError, BytesSizeMismatchError, DecodeLogDataMismatch, DecodeLogTopicsMismatch, InvalidAbiEncodingTypeError, InvalidAbiDecodingTypeError, InvalidArrayError, InvalidDefinitionTypeError, UnsupportedPackedAbiType;
+var AbiConstructorNotFoundError, AbiConstructorParamsNotFoundError, AbiDecodingDataSizeTooSmallError, AbiDecodingZeroDataError, AbiEncodingArrayLengthMismatchError, AbiEncodingBytesSizeMismatchError, AbiEncodingLengthMismatchError, AbiErrorInputsNotFoundError, AbiErrorNotFoundError, AbiErrorSignatureNotFoundError, AbiEventSignatureEmptyTopicsError, AbiEventSignatureNotFoundError, AbiEventNotFoundError, AbiFunctionNotFoundError, AbiFunctionOutputsNotFoundError, AbiFunctionSignatureNotFoundError, AbiItemAmbiguityError, BytesSizeMismatchError, DecodeLogDataMismatch, DecodeLogTopicsMismatch, InvalidAbiEncodingTypeError, InvalidAbiDecodingTypeError, InvalidArrayError, InvalidDefinitionTypeError;
 var init_abi = __esm({
   "../../node_modules/.pnpm/viem@2.47.10_typescript@5.9.3_zod@4.3.6/node_modules/viem/_esm/errors/abi.js"() {
     init_formatAbiItem2();
@@ -29773,13 +29773,6 @@ var init_abi = __esm({
           `"${type}" is not a valid definition type.`,
           'Valid types: "function", "event", "error"'
         ].join("\n"), { name: "InvalidDefinitionTypeError" });
-      }
-    };
-    UnsupportedPackedAbiType = class extends BaseError2 {
-      constructor(type) {
-        super(`Type "${type}" is not supported for packed encoding.`, {
-          name: "UnsupportedPackedAbiType"
-        });
       }
     };
   }
@@ -30759,10 +30752,9 @@ var init_slice = __esm({
 });
 
 // ../../node_modules/.pnpm/viem@2.47.10_typescript@5.9.3_zod@4.3.6/node_modules/viem/_esm/utils/regex.js
-var arrayRegex, bytesRegex2, integerRegex2;
+var bytesRegex2, integerRegex2;
 var init_regex2 = __esm({
   "../../node_modules/.pnpm/viem@2.47.10_typescript@5.9.3_zod@4.3.6/node_modules/viem/_esm/utils/regex.js"() {
-    arrayRegex = /^(.*)\[([0-9]*)\]$/;
     bytesRegex2 = /^bytes([1-9]|1[0-9]|2[0-9]|3[0-2])?$/;
     integerRegex2 = /^(u?int)(8|16|24|32|40|48|56|64|72|80|88|96|104|112|120|128|136|144|152|160|168|176|184|192|200|208|216|224|232|240|248|256)?$/;
   }
@@ -41657,9 +41649,6 @@ var health_default = router;
 // src/routes/bot.ts
 var import_express2 = __toESM(require_express2(), 1);
 
-// ../../node_modules/.pnpm/viem@2.47.10_typescript@5.9.3_zod@4.3.6/node_modules/viem/_esm/index.js
-init_exports();
-
 // ../../node_modules/.pnpm/viem@2.47.10_typescript@5.9.3_zod@4.3.6/node_modules/viem/_esm/utils/getAction.js
 function getAction(client, actionFn, name) {
   const action_implicit = client[actionFn.name];
@@ -41911,8 +41900,8 @@ function getEncodableList(list) {
         else
           cursor.pushUint32(bodyLength);
       }
-      for (const { encode: encode5 } of list) {
-        encode5(cursor);
+      for (const { encode: encode4 } of list) {
+        encode4(cursor);
       }
     }
   };
@@ -45200,76 +45189,6 @@ async function getFilterLogs(_client, { filter }) {
 // ../../node_modules/.pnpm/viem@2.47.10_typescript@5.9.3_zod@4.3.6/node_modules/viem/_esm/actions/public/getProof.js
 init_toHex();
 
-// ../../node_modules/.pnpm/viem@2.47.10_typescript@5.9.3_zod@4.3.6/node_modules/viem/_esm/utils/abi/encodePacked.js
-init_abi();
-init_address();
-init_isAddress();
-init_concat();
-init_pad();
-init_toHex();
-init_regex2();
-function encodePacked(types, values) {
-  if (types.length !== values.length)
-    throw new AbiEncodingLengthMismatchError({
-      expectedLength: types.length,
-      givenLength: values.length
-    });
-  const data = [];
-  for (let i = 0; i < types.length; i++) {
-    const type = types[i];
-    const value = values[i];
-    data.push(encode(type, value));
-  }
-  return concatHex(data);
-}
-function encode(type, value, isArray = false) {
-  if (type === "address") {
-    const address = value;
-    if (!isAddress(address))
-      throw new InvalidAddressError({ address });
-    return pad(address.toLowerCase(), {
-      size: isArray ? 32 : null
-    });
-  }
-  if (type === "string")
-    return stringToHex(value);
-  if (type === "bytes")
-    return value;
-  if (type === "bool")
-    return pad(boolToHex(value), { size: isArray ? 32 : 1 });
-  const intMatch = type.match(integerRegex2);
-  if (intMatch) {
-    const [_type, baseType, bits = "256"] = intMatch;
-    const size5 = Number.parseInt(bits, 10) / 8;
-    return numberToHex(value, {
-      size: isArray ? 32 : size5,
-      signed: baseType === "int"
-    });
-  }
-  const bytesMatch = type.match(bytesRegex2);
-  if (bytesMatch) {
-    const [_type, size5] = bytesMatch;
-    if (Number.parseInt(size5, 10) !== (value.length - 2) / 2)
-      throw new BytesSizeMismatchError({
-        expectedSize: Number.parseInt(size5, 10),
-        givenSize: (value.length - 2) / 2
-      });
-    return pad(value, { dir: "right", size: isArray ? 32 : null });
-  }
-  const arrayMatch = type.match(arrayRegex);
-  if (arrayMatch && Array.isArray(value)) {
-    const [_type, childType] = arrayMatch;
-    const data = [];
-    for (let i = 0; i < value.length; i++) {
-      data.push(encode(childType, value[i], true));
-    }
-    if (data.length === 0)
-      return "0x";
-    return concatHex(data);
-  }
-  throw new UnsupportedPackedAbiType(type);
-}
-
 // ../../node_modules/.pnpm/viem@2.47.10_typescript@5.9.3_zod@4.3.6/node_modules/viem/_esm/utils/authorization/serializeAuthorizationList.js
 init_toHex();
 
@@ -46560,7 +46479,7 @@ init_Errors();
 init_Hex();
 
 // ../../node_modules/.pnpm/ox@0.14.7_typescript@5.9.3_zod@4.3.6/node_modules/ox/_esm/core/Solidity.js
-var arrayRegex2 = /^(.*)\[([0-9]*)\]$/;
+var arrayRegex = /^(.*)\[([0-9]*)\]$/;
 var bytesRegex3 = /^bytes([1-9]|1[0-9]|2[0-9]|3[0-2])?$/;
 var integerRegex3 = /^(u?int)(8|16|24|32|40|48|56|64|72|80|88|96|104|112|120|128|136|144|152|160|168|176|184|192|200|208|216|224|232|240|248|256)?$/;
 var maxInt82 = 2n ** (8n - 1n) - 1n;
@@ -46873,7 +46792,7 @@ function prepareParameter({ checksumAddress: checksumAddress2 = false, parameter
   }
   throw new InvalidTypeError(parameter.type);
 }
-function encode2(preparedParameters) {
+function encode(preparedParameters) {
   let staticSize = 0;
   for (let i = 0; i < preparedParameters.length; i++) {
     const { dynamic, encoded } = preparedParameters[i];
@@ -46929,7 +46848,7 @@ function encodeArray2(value, options) {
     preparedParameters.push(preparedParam);
   }
   if (dynamic || dynamicChild) {
-    const data = encode2(preparedParameters);
+    const data = encode(preparedParameters);
     if (dynamic) {
       const length2 = fromNumber(preparedParameters.length, { size: 32 });
       return {
@@ -47020,7 +46939,7 @@ function encodeTuple2(value, options) {
   }
   return {
     dynamic,
-    encoded: dynamic ? encode2(preparedParameters) : concat2(...preparedParameters.map(({ encoded }) => encoded))
+    encoded: dynamic ? encode(preparedParameters) : concat2(...preparedParameters.map(({ encoded }) => encoded))
   };
 }
 function getArrayComponents2(type) {
@@ -47282,7 +47201,7 @@ function decode(parameters, data, options = {}) {
   }
   return values;
 }
-function encode3(parameters, values, options) {
+function encode2(parameters, values, options) {
   const { checksumAddress: checksumAddress2 = false } = options ?? {};
   if (parameters.length !== values.length)
     throw new LengthMismatchError({
@@ -47294,12 +47213,12 @@ function encode3(parameters, values, options) {
     parameters,
     values
   });
-  const data = encode2(preparedParameters);
+  const data = encode(preparedParameters);
   if (data.length === 0)
     return "0x";
   return data;
 }
-function encodePacked2(types, values) {
+function encodePacked(types, values) {
   if (types.length !== values.length)
     throw new LengthMismatchError({
       expectedLength: types.length,
@@ -47309,12 +47228,12 @@ function encodePacked2(types, values) {
   for (let i = 0; i < types.length; i++) {
     const type = types[i];
     const value = values[i];
-    data.push(encodePacked2.encode(type, value));
+    data.push(encodePacked.encode(type, value));
   }
   return concat2(...data);
 }
-(function(encodePacked3) {
-  function encode5(type, value, isArray = false) {
+(function(encodePacked2) {
+  function encode4(type, value, isArray = false) {
     if (type === "address") {
       const address = value;
       assert4(address);
@@ -47345,12 +47264,12 @@ function encodePacked2(types, values) {
         });
       return padRight(value, isArray ? 32 : 0);
     }
-    const arrayMatch = type.match(arrayRegex2);
+    const arrayMatch = type.match(arrayRegex);
     if (arrayMatch && Array.isArray(value)) {
       const [_type, childType] = arrayMatch;
       const data = [];
       for (let i = 0; i < value.length; i++) {
-        data.push(encode5(childType, value[i], true));
+        data.push(encode4(childType, value[i], true));
       }
       if (data.length === 0)
         return "0x";
@@ -47358,8 +47277,8 @@ function encodePacked2(types, values) {
     }
     throw new InvalidTypeError(type);
   }
-  encodePacked3.encode = encode5;
-})(encodePacked2 || (encodePacked2 = {}));
+  encodePacked2.encode = encode4;
+})(encodePacked || (encodePacked = {}));
 function from5(parameters) {
   if (Array.isArray(parameters) && typeof parameters[0] === "string")
     return parseAbiParameters(parameters);
@@ -47503,8 +47422,8 @@ function getEncodableList2(list) {
         else
           cursor.pushUint32(bodyLength);
       }
-      for (const { encode: encode5 } of list) {
-        encode5(cursor);
+      for (const { encode: encode4 } of list) {
+        encode4(cursor);
       }
     }
   };
@@ -47838,7 +47757,7 @@ function wrap(value) {
     payload: getSignPayload(value.authorization),
     signature: from7(value.authorization)
   });
-  const suffix = encode3(suffixParameters, [
+  const suffix = encode2(suffixParameters, [
     {
       ...value.authorization,
       delegation: value.authorization.address,
@@ -48536,7 +48455,7 @@ var NotFoundError = class extends BaseError3 {
 
 // ../../node_modules/.pnpm/ox@0.14.7_typescript@5.9.3_zod@4.3.6/node_modules/ox/_esm/core/AbiConstructor.js
 init_Hex();
-function encode4(...parameters) {
+function encode3(...parameters) {
   const [abiConstructor, options] = (() => {
     if (Array.isArray(parameters[0])) {
       const [abi2, options2] = parameters;
@@ -48545,7 +48464,7 @@ function encode4(...parameters) {
     return parameters;
   })();
   const { bytecode, args } = options;
-  return concat2(bytecode, abiConstructor.inputs?.length && args?.length ? encode3(abiConstructor.inputs, args) : "0x");
+  return concat2(bytecode, abiConstructor.inputs?.length && args?.length ? encode2(abiConstructor.inputs, args) : "0x");
 }
 function from11(abiConstructor) {
   return from10(abiConstructor);
@@ -48573,7 +48492,7 @@ function encodeData2(...parameters) {
     args
   }) : abiFunction;
   const selector = getSelector2(item);
-  const data = args.length > 0 ? encode3(item.inputs, args) : void 0;
+  const data = args.length > 0 ? encode2(item.inputs, args) : void 0;
   return data ? concat2(selector, data) : selector;
 }
 function from12(abiFunction, options = {}) {
@@ -48606,7 +48525,7 @@ async function simulateCalls(client, parameters) {
   const account = parameters.account ? parseAccount(parameters.account) : void 0;
   if (traceAssetChanges && !account)
     throw new BaseError2("`account` is required when `traceAssetChanges` is true");
-  const getBalanceData = account ? encode4(from11("constructor(bytes, bytes)"), {
+  const getBalanceData = account ? encode3(from11("constructor(bytes, bytes)"), {
     bytecode: deploylessCallViaBytecodeBytecode,
     args: [
       getBalanceCode,
@@ -48873,7 +48792,7 @@ function unwrap2(wrapped) {
 }
 function wrap2(value) {
   const { data, signature, to } = value;
-  return concat2(encode3(from5("address, bytes, bytes"), [
+  return concat2(encode2(from5("address, bytes, bytes"), [
     to,
     data,
     signature
@@ -50468,7 +50387,6 @@ function http(url, config = {}) {
 }
 
 // ../../node_modules/.pnpm/viem@2.47.10_typescript@5.9.3_zod@4.3.6/node_modules/viem/_esm/index.js
-init_encodeAbiParameters();
 init_encodeFunctionData();
 init_formatEther();
 init_formatUnits();
@@ -51003,12 +50921,10 @@ import { resolve as resolve2 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 var TOKEN_ADDRESS = "0x38DcDB3A381677239BBc652aed9811F2f8496345";
 var WETH_ADDRESS = "0x4200000000000000000000000000000000000006";
-var BUY_ROUTER = "0x6ff5693b99212da76ad316178a184ab56d299b43";
-var SELL_ROUTER = "0x03a520b32C04BF3bEEf7BEb72E919cf822Ed34f1";
+var BUY_ROUTER = "0x2626664c2603336E57B271c5C0b26F421741e481";
+var SELL_ROUTER = "0x2626664c2603336E57B271c5C0b26F421741e481";
 var POOL_ADDRESS = "0x8fdDa852a7b106b08848da676b8793814D561617";
 var POOL_FEE = 300;
-var CMD_WRAP_ETH = 11;
-var CMD_V3_SWAP_EXACT_IN = 0;
 var SELL_PROBABILITY_BASE = 0.4;
 var SELL_PCT_MIN = 0.15;
 var SELL_PCT_MAX = 0.85;
@@ -51024,17 +50940,23 @@ var BUY_PRESETS = [
 ];
 var WALLET_WEIGHTS2 = [0.35, 0.3, 0.2, 0.15];
 var MIN_ETH_FOR_SELL = 5e-4;
-var UNIVERSAL_ROUTER_ABI = [
+var WETH9_ABI = [
   {
-    name: "execute",
+    name: "deposit",
     type: "function",
     stateMutability: "payable",
-    inputs: [
-      { name: "commands", type: "bytes" },
-      { name: "inputs", type: "bytes[]" },
-      { name: "deadline", type: "uint256" }
-    ],
+    inputs: [],
     outputs: []
+  },
+  {
+    name: "approve",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" }
+    ],
+    outputs: [{ name: "", type: "bool" }]
   }
 ];
 var SWAP_ROUTER_ABI = [
@@ -51262,12 +51184,6 @@ async function getTokenBalance(address) {
   });
   return { raw, human: formatUnits(raw, TOKEN_DECIMALS) };
 }
-function buildBuyPath() {
-  return encodePacked(
-    ["address", "uint24", "address"],
-    [WETH_ADDRESS, POOL_FEE, TOKEN_ADDRESS]
-  );
-}
 function encodeExactInputSingle(params) {
   return encodeFunctionData({
     abi: SWAP_ROUTER_ABI,
@@ -51317,25 +51233,55 @@ async function executeBuy(wallet, ethPriceUsd, manual = false) {
     { wallet: wallet.address, usd: usdAmount.toFixed(4), eth: ethAmount.toFixed(8) },
     "Executing BUY..."
   );
-  const path = buildBuyPath();
-  const wrapInput = encodeAbiParameters(parseAbiParameters("address, uint256"), [BUY_ROUTER, ethWei]);
-  const swapInput = encodeAbiParameters(
-    parseAbiParameters("address, uint256, uint256, bytes, bool"),
-    [wallet.address, ethWei, 0n, path, false]
-  );
   try {
-    const gasPrice = await getVariedGasPrice();
+    logger.info({ wallet: wallet.address }, "Step 1: wrapping ETH \u2192 WETH...");
+    const wrapGasPrice = await getVariedGasPrice();
+    const wrapHash = await wallet.walletClient.writeContract({
+      address: WETH_ADDRESS,
+      abi: WETH9_ABI,
+      functionName: "deposit",
+      args: [],
+      value: ethWei,
+      gasPrice: wrapGasPrice
+    });
+    const wrapReceipt = await publicClient.waitForTransactionReceipt({ hash: wrapHash });
+    if (wrapReceipt.status === "reverted") {
+      throw new Error(`WETH9.deposit reverted (hash ${wrapHash})`);
+    }
+    logger.info({ wrapHash }, "ETH wrapped to WETH \u2705");
+    await sleep(1e3);
+    logger.info({ wallet: wallet.address }, "Step 2: approving SwapRouter02 for WETH...");
+    const wethApproveGasPrice = await getVariedGasPrice();
+    const wethApproveHash = await wallet.walletClient.writeContract({
+      address: WETH_ADDRESS,
+      abi: WETH9_ABI,
+      functionName: "approve",
+      args: [BUY_ROUTER, ethWei],
+      gasPrice: wethApproveGasPrice
+    });
+    const wethApproveReceipt = await publicClient.waitForTransactionReceipt({ hash: wethApproveHash });
+    if (wethApproveReceipt.status === "reverted") {
+      throw new Error(`WETH9.approve reverted (hash ${wethApproveHash})`);
+    }
+    logger.info({ wethApproveHash }, "WETH approval confirmed \u2705");
+    await sleep(1e3);
+    logger.info({ wallet: wallet.address }, "Step 3: swapping WETH \u2192 TOKEN...");
+    const swapGasPrice = await getVariedGasPrice();
     const hash3 = await wallet.walletClient.writeContract({
       address: BUY_ROUTER,
-      abi: UNIVERSAL_ROUTER_ABI,
-      functionName: "execute",
-      args: [
-        `0x${CMD_WRAP_ETH.toString(16).padStart(2, "0")}${CMD_V3_SWAP_EXACT_IN.toString(16).padStart(2, "0")}`,
-        [wrapInput, swapInput],
-        deadline
-      ],
-      value: ethWei,
-      gasPrice
+      abi: SWAP_ROUTER_ABI,
+      functionName: "exactInputSingle",
+      args: [{
+        tokenIn: WETH_ADDRESS,
+        tokenOut: TOKEN_ADDRESS,
+        fee: POOL_FEE,
+        recipient: wallet.address,
+        amountIn: ethWei,
+        amountOutMinimum: 0n,
+        sqrtPriceLimitX96: 0n
+      }],
+      value: 0n,
+      gasPrice: swapGasPrice
     });
     await publicClient.waitForTransactionReceipt({ hash: hash3 });
     record.txHash = hash3;
