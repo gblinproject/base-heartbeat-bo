@@ -50928,7 +50928,7 @@ var POOL_FEE = 300;
 var SELL_PROBABILITY_BASE = 0.4;
 var SELL_PCT_MIN = 0.15;
 var SELL_PCT_MAX = 0.85;
-var FUNDED_THRESHOLD_USD = 15;
+var FUNDED_THRESHOLD_USD = 5;
 var POLLING_INTERVAL_MS = 60 * 1e3;
 var SELL_COOLDOWN_MS = 18 * 60 * 1e3;
 var BUY_PRESETS = [
@@ -50940,25 +50940,6 @@ var BUY_PRESETS = [
 ];
 var WALLET_WEIGHTS2 = [0.35, 0.3, 0.2, 0.15];
 var MIN_ETH_FOR_SELL = 5e-4;
-var WETH9_ABI = [
-  {
-    name: "deposit",
-    type: "function",
-    stateMutability: "payable",
-    inputs: [],
-    outputs: []
-  },
-  {
-    name: "approve",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "spender", type: "address" },
-      { name: "amount", type: "uint256" }
-    ],
-    outputs: [{ name: "", type: "bool" }]
-  }
-];
 var SWAP_ROUTER_ABI = [
   {
     name: "exactInputSingle",
@@ -51234,39 +51215,8 @@ async function executeBuy(wallet, ethPriceUsd, manual = false) {
     "Executing BUY..."
   );
   try {
-    logger.info({ wallet: wallet.address }, "Step 1: wrapping ETH \u2192 WETH...");
-    const wrapGasPrice = await getVariedGasPrice();
-    const wrapHash = await wallet.walletClient.writeContract({
-      address: WETH_ADDRESS,
-      abi: WETH9_ABI,
-      functionName: "deposit",
-      args: [],
-      value: ethWei,
-      gasPrice: wrapGasPrice
-    });
-    const wrapReceipt = await publicClient.waitForTransactionReceipt({ hash: wrapHash });
-    if (wrapReceipt.status === "reverted") {
-      throw new Error(`WETH9.deposit reverted (hash ${wrapHash})`);
-    }
-    logger.info({ wrapHash }, "ETH wrapped to WETH \u2705");
-    await sleep(1e3);
-    logger.info({ wallet: wallet.address }, "Step 2: approving SwapRouter02 for WETH...");
-    const wethApproveGasPrice = await getVariedGasPrice();
-    const wethApproveHash = await wallet.walletClient.writeContract({
-      address: WETH_ADDRESS,
-      abi: WETH9_ABI,
-      functionName: "approve",
-      args: [BUY_ROUTER, ethWei],
-      gasPrice: wethApproveGasPrice
-    });
-    const wethApproveReceipt = await publicClient.waitForTransactionReceipt({ hash: wethApproveHash });
-    if (wethApproveReceipt.status === "reverted") {
-      throw new Error(`WETH9.approve reverted (hash ${wethApproveHash})`);
-    }
-    logger.info({ wethApproveHash }, "WETH approval confirmed \u2705");
-    await sleep(1e3);
-    logger.info({ wallet: wallet.address }, "Step 3: swapping WETH \u2192 TOKEN...");
-    const swapGasPrice = await getVariedGasPrice();
+    logger.info({ wallet: wallet.address, usd: usdAmount.toFixed(4) }, "Sending ETH \u2192 TOKEN swap (1 tx)...");
+    const gasPrice = await getVariedGasPrice();
     const hash3 = await wallet.walletClient.writeContract({
       address: BUY_ROUTER,
       abi: SWAP_ROUTER_ABI,
@@ -51280,8 +51230,8 @@ async function executeBuy(wallet, ethPriceUsd, manual = false) {
         amountOutMinimum: 0n,
         sqrtPriceLimitX96: 0n
       }],
-      value: 0n,
-      gasPrice: swapGasPrice
+      value: ethWei,
+      gasPrice
     });
     await publicClient.waitForTransactionReceipt({ hash: hash3 });
     record.txHash = hash3;
@@ -51381,6 +51331,7 @@ async function executeSell(wallet, ethPriceUsd, manual = false) {
       amountOutMinimum: 0n
     });
     const unwrapCalldata = encodeUnwrapWETH9(wallet.address);
+    const ethBeforeSwap = await publicClient.getBalance({ address: wallet.address });
     const swapGasPrice = await getVariedGasPrice();
     const swapHash = await wallet.walletClient.writeContract({
       address: SELL_ROUTER,
@@ -51391,8 +51342,14 @@ async function executeSell(wallet, ethPriceUsd, manual = false) {
       gas: 400000n,
       gasPrice: swapGasPrice
     });
-    await publicClient.waitForTransactionReceipt({ hash: swapHash });
+    const swapReceipt = await publicClient.waitForTransactionReceipt({ hash: swapHash });
+    const ethAfterSwap = await publicClient.getBalance({ address: wallet.address });
+    const gasCostWei = swapReceipt.gasUsed * (swapReceipt.effectiveGasPrice ?? swapGasPrice);
+    const ethReceivedWei = ethAfterSwap + gasCostWei > ethBeforeSwap ? ethAfterSwap + gasCostWei - ethBeforeSwap : 0n;
+    const ethReceived = Number(ethReceivedWei) / 1e18;
     record.txHash = swapHash;
+    record.ethAmount = ethReceived;
+    record.usdAmount = ethReceived * ethPriceUsd;
     record.success = true;
     lastSellTimestamp.set(wallet.index, Date.now());
     consecutiveBuys.set(wallet.index, 0);
