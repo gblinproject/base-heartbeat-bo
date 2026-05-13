@@ -51559,7 +51559,7 @@ async function executeSellAerodrome(wallet, ethPriceUsd, manual = false) {
     return record;
   }
   const lastSell = lastSellTimestamp.get(wallet.index) ?? 0;
-  if (Date.now() - lastSell < SELL_COOLDOWN_MS) {
+  if (!manual && Date.now() - lastSell < SELL_COOLDOWN_MS) {
     record.error = "Sell cooldown active for this wallet";
     return record;
   }
@@ -51650,7 +51650,7 @@ async function executeSell(wallet, ethPriceUsd, manual = false) {
     return record;
   }
   const lastSell = lastSellTimestamp.get(wallet.index) ?? 0;
-  if (Date.now() - lastSell < SELL_COOLDOWN_MS) {
+  if (!manual && Date.now() - lastSell < SELL_COOLDOWN_MS) {
     record.error = "Sell cooldown active for this wallet";
     logger.info(
       { wallet: wallet.address, cooldownRemaining: Math.round((SELL_COOLDOWN_MS - (Date.now() - lastSell)) / 6e4) + " min" },
@@ -51903,7 +51903,7 @@ async function bestExecutionSell(wallet, ethPriceUsd, manual = false) {
     };
   }
   const lastSell = lastSellTimestamp.get(wallet.index) ?? 0;
-  if (Date.now() - lastSell < SELL_COOLDOWN_MS) {
+  if (!manual && Date.now() - lastSell < SELL_COOLDOWN_MS) {
     return {
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
       type: "sell",
