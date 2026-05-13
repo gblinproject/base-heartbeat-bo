@@ -50921,10 +50921,11 @@ import { resolve as resolve2 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 var TOKEN_ADDRESS = "0x38DcDB3A381677239BBc652aed9811F2f8496345";
 var WETH_ADDRESS = "0x4200000000000000000000000000000000000006";
-var BUY_ROUTER = "0x2626664c2603336E57B271c5C0b26F421741e481";
-var SELL_ROUTER = "0x2626664c2603336E57B271c5C0b26F421741e481";
-var POOL_ADDRESS = "0x8fdDa852a7b106b08848da676b8793814D561617";
-var POOL_FEE = 300;
+var UNI_ROUTER = "0x2626664c2603336E57B271c5C0b26F421741e481";
+var UNI_POOL_FEE = 300;
+var AERO_ROUTER = "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43";
+var AERO_FACTORY = "0x420DD381b31aEf6683db6B902084cB0ffece40Da";
+var AERO_POOL = "0x7dcd4f5bcdae0546c84dab54401a93ad6e92ae1b";
 var SELL_PROBABILITY_BASE = 0.4;
 var SELL_PCT_MIN = 0.15;
 var SELL_PCT_MAX = 0.85;
@@ -50981,6 +50982,51 @@ var SWAP_ROUTER_ABI = [
       { name: "recipient", type: "address" }
     ],
     outputs: []
+  }
+];
+var AERO_ROUTER_ABI = [
+  {
+    name: "swapExactETHForTokens",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [
+      { name: "amountOutMin", type: "uint256" },
+      {
+        name: "routes",
+        type: "tuple[]",
+        components: [
+          { name: "from", type: "address" },
+          { name: "to", type: "address" },
+          { name: "stable", type: "bool" },
+          { name: "factory", type: "address" }
+        ]
+      },
+      { name: "to", type: "address" },
+      { name: "deadline", type: "uint256" }
+    ],
+    outputs: [{ name: "amounts", type: "uint256[]" }]
+  },
+  {
+    name: "swapExactTokensForETH",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "amountIn", type: "uint256" },
+      { name: "amountOutMin", type: "uint256" },
+      {
+        name: "routes",
+        type: "tuple[]",
+        components: [
+          { name: "from", type: "address" },
+          { name: "to", type: "address" },
+          { name: "stable", type: "bool" },
+          { name: "factory", type: "address" }
+        ]
+      },
+      { name: "to", type: "address" },
+      { name: "deadline", type: "uint256" }
+    ],
+    outputs: [{ name: "amounts", type: "uint256[]" }]
   }
 ];
 var ERC20_ABI = [
@@ -51218,13 +51264,13 @@ async function executeBuy(wallet, ethPriceUsd, manual = false) {
     logger.info({ wallet: wallet.address, usd: usdAmount.toFixed(4) }, "Sending ETH \u2192 TOKEN swap (1 tx)...");
     const gasPrice = await getVariedGasPrice();
     const hash3 = await wallet.walletClient.writeContract({
-      address: BUY_ROUTER,
+      address: UNI_ROUTER,
       abi: SWAP_ROUTER_ABI,
       functionName: "exactInputSingle",
       args: [{
         tokenIn: WETH_ADDRESS,
         tokenOut: TOKEN_ADDRESS,
-        fee: POOL_FEE,
+        fee: UNI_POOL_FEE,
         recipient: wallet.address,
         amountIn: ethWei,
         amountOutMinimum: 0n,
@@ -51244,6 +51290,144 @@ async function executeBuy(wallet, ethPriceUsd, manual = false) {
   } catch (err) {
     record.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
     logger.error({ err }, "BUY failed");
+  }
+  sendTradeAlert(record).catch(() => {
+  });
+  return record;
+}
+async function executeBuyAerodrome(wallet, ethPriceUsd, manual = false) {
+  await applyJitter(manual);
+  const usdAmount = selectBuyAmountUsd();
+  const ethAmount = usdAmount / ethPriceUsd;
+  const ethWei = parseEther(ethAmount.toFixed(18));
+  const deadline = BigInt(Math.floor(Date.now() / 1e3) + 300);
+  const record = {
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    type: "buy",
+    walletIndex: wallet.index,
+    walletAddress: wallet.address,
+    ethAmount,
+    usdAmount,
+    tokenAmount: "0",
+    ethPriceUsd,
+    txHash: null,
+    success: false
+  };
+  const ethBalance = await getEthBalance(wallet.address);
+  if (ethBalance < ethAmount + 1e-4) {
+    record.error = `Low ETH balance: ${ethBalance.toFixed(6)} ETH`;
+    return record;
+  }
+  logger.info({ wallet: wallet.address, usd: usdAmount.toFixed(4), dex: "Aerodrome" }, "Executing BUY (Aerodrome)...");
+  try {
+    const gasPrice = await getVariedGasPrice();
+    const hash3 = await wallet.walletClient.writeContract({
+      address: AERO_ROUTER,
+      abi: AERO_ROUTER_ABI,
+      functionName: "swapExactETHForTokens",
+      args: [
+        0n,
+        [{ from: WETH_ADDRESS, to: TOKEN_ADDRESS, stable: false, factory: AERO_FACTORY }],
+        wallet.address,
+        deadline
+      ],
+      value: ethWei,
+      gasPrice
+    });
+    await publicClient.waitForTransactionReceipt({ hash: hash3 });
+    record.txHash = hash3;
+    record.success = true;
+    consecutiveBuys.set(wallet.index, (consecutiveBuys.get(wallet.index) ?? 0) + 1);
+    logger.info({ hash: hash3, usd: usdAmount.toFixed(4), dex: "Aerodrome" }, "BUY Aerodrome confirmed \u2705");
+  } catch (err) {
+    record.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
+    logger.error({ err }, "BUY Aerodrome failed");
+  }
+  sendTradeAlert(record).catch(() => {
+  });
+  return record;
+}
+async function executeSellAerodrome(wallet, ethPriceUsd, manual = false) {
+  await applyJitter(manual);
+  const { raw: tokenBalanceRaw, human: tokenBalanceHuman } = await getTokenBalance(wallet.address);
+  const record = {
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    type: "sell",
+    walletIndex: wallet.index,
+    walletAddress: wallet.address,
+    ethAmount: 0,
+    usdAmount: 0,
+    tokenAmount: "0",
+    ethPriceUsd,
+    txHash: null,
+    success: false
+  };
+  if (tokenBalanceRaw === 0n) {
+    record.error = "No token balance to sell";
+    return record;
+  }
+  const ethBalance = await getEthBalance(wallet.address);
+  if (ethBalance < MIN_ETH_FOR_SELL) {
+    record.error = `Low ETH for gas: ${ethBalance.toFixed(6)} ETH (need ${MIN_ETH_FOR_SELL})`;
+    return record;
+  }
+  const lastSell = lastSellTimestamp.get(wallet.index) ?? 0;
+  if (Date.now() - lastSell < SELL_COOLDOWN_MS) {
+    record.error = "Sell cooldown active for this wallet";
+    return record;
+  }
+  const sellPct = randomBetween(SELL_PCT_MIN, SELL_PCT_MAX);
+  const sellAmount = tokenBalanceRaw * BigInt(Math.floor(sellPct * 1e4)) / 10000n;
+  if (sellAmount === 0n) {
+    record.error = "Sell amount too small";
+    return record;
+  }
+  record.tokenAmount = formatUnits(sellAmount, TOKEN_DECIMALS);
+  logger.info({ wallet: wallet.address, tokenBal: tokenBalanceHuman, sellPct: (sellPct * 100).toFixed(1) + "%", dex: "Aerodrome" }, "Executing SELL (Aerodrome)...");
+  const deadline = BigInt(Math.floor(Date.now() / 1e3) + 300);
+  try {
+    const approveGasPrice = await getVariedGasPrice();
+    const approveHash = await wallet.walletClient.writeContract({
+      address: TOKEN_ADDRESS,
+      abi: ERC20_ABI,
+      functionName: "approve",
+      args: [AERO_ROUTER, sellAmount],
+      gasPrice: approveGasPrice
+    });
+    const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
+    if (approveReceipt.status === "reverted") throw new Error(`approve reverted (${approveHash})`);
+    await sleep(2e3);
+    const ethBeforeSwap = await publicClient.getBalance({ address: wallet.address });
+    const swapGasPrice = await getVariedGasPrice();
+    const swapHash = await wallet.walletClient.writeContract({
+      address: AERO_ROUTER,
+      abi: AERO_ROUTER_ABI,
+      functionName: "swapExactTokensForETH",
+      args: [
+        sellAmount,
+        0n,
+        [{ from: TOKEN_ADDRESS, to: WETH_ADDRESS, stable: false, factory: AERO_FACTORY }],
+        wallet.address,
+        deadline
+      ],
+      gasPrice: swapGasPrice
+    });
+    const swapReceipt = await publicClient.waitForTransactionReceipt({ hash: swapHash });
+    const ethAfterSwap = await publicClient.getBalance({ address: wallet.address });
+    const gasCostWei = swapReceipt.gasUsed * (swapReceipt.effectiveGasPrice ?? swapGasPrice);
+    const ethReceivedWei = ethAfterSwap + gasCostWei > ethBeforeSwap ? ethAfterSwap + gasCostWei - ethBeforeSwap : 0n;
+    const ethReceived = Number(ethReceivedWei) / 1e18;
+    record.txHash = swapHash;
+    record.ethAmount = ethReceived;
+    record.usdAmount = ethReceived * ethPriceUsd;
+    record.success = true;
+    lastSellTimestamp.set(wallet.index, Date.now());
+    consecutiveBuys.set(wallet.index, 0);
+    rollRebalanceThreshold(wallet.index);
+    logger.info({ swapHash, tokensSold: record.tokenAmount, dex: "Aerodrome" }, "SELL Aerodrome confirmed \u2705");
+  } catch (err) {
+    record.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
+    logger.error({ err }, "SELL Aerodrome failed");
   }
   sendTradeAlert(record).catch(() => {
   });
@@ -51311,7 +51495,7 @@ async function executeSell(wallet, ethPriceUsd, manual = false) {
       address: TOKEN_ADDRESS,
       abi: ERC20_ABI,
       functionName: "approve",
-      args: [SELL_ROUTER, sellAmount],
+      args: [UNI_ROUTER, sellAmount],
       gasPrice: approveGasPrice
     });
     const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
@@ -51324,9 +51508,9 @@ async function executeSell(wallet, ethPriceUsd, manual = false) {
     const swapCalldata = encodeExactInputSingle({
       tokenIn: TOKEN_ADDRESS,
       tokenOut: WETH_ADDRESS,
-      fee: POOL_FEE,
-      recipient: SELL_ROUTER,
-      // SELL_ROUTER receives WETH, then unwraps to ETH
+      fee: UNI_POOL_FEE,
+      recipient: UNI_ROUTER,
+      // router receives WETH, then unwraps to ETH
       amountIn: sellAmount,
       amountOutMinimum: 0n
     });
@@ -51334,7 +51518,7 @@ async function executeSell(wallet, ethPriceUsd, manual = false) {
     const ethBeforeSwap = await publicClient.getBalance({ address: wallet.address });
     const swapGasPrice = await getVariedGasPrice();
     const swapHash = await wallet.walletClient.writeContract({
-      address: SELL_ROUTER,
+      address: UNI_ROUTER,
       abi: SWAP_ROUTER_ABI,
       functionName: "multicall",
       args: [deadline, [swapCalldata, unwrapCalldata]],
@@ -51438,14 +51622,18 @@ async function executeTrade(ethPriceUsd) {
         }
       }
       logger.info({ sellProbability: (sellProb * 100).toFixed(0) + "%" }, "Trade type: SELL");
-      return withRetry2(() => executeSell(chosen, ethPriceUsd));
+      const useAeroSell = Math.random() < 0.5;
+      return withRetry2(
+        () => useAeroSell ? executeSellAerodrome(chosen, ethPriceUsd) : executeSell(chosen, ethPriceUsd)
+      );
     }
     logger.info("All wallets in sell cooldown \u2013 falling back to BUY");
   }
   const walletIdx = selectWalletIndex();
   const wallet = wallets2[walletIdx];
-  logger.info({ sellProbability: (sellProb * 100).toFixed(0) + "%" }, "Trade type: BUY");
-  return withRetry2(() => executeBuy(wallet, ethPriceUsd));
+  const useAerodrome = Math.random() < 0.5;
+  logger.info({ sellProbability: (sellProb * 100).toFixed(0) + "%", dex: useAerodrome ? "Aerodrome" : "Uniswap" }, "Trade type: BUY");
+  return useAerodrome ? withRetry2(() => executeBuyAerodrome(wallet, ethPriceUsd)) : withRetry2(() => executeBuy(wallet, ethPriceUsd));
 }
 async function refreshBalances(ethPriceUsd) {
   const ws = getOrCreateWallets();
@@ -51574,9 +51762,10 @@ async function startBot() {
         network: "Base Mainnet",
         threshold: `$${FUNDED_THRESHOLD_USD}`,
         token: TOKEN_ADDRESS,
-        pool: POOL_ADDRESS,
-        buyRouter: BUY_ROUTER,
-        sellRouter: SELL_ROUTER,
+        uniPool: "0x8fdDa852a7b106b08848da676b8793814D561617",
+        aeroPool: AERO_POOL,
+        uniRouter: UNI_ROUTER,
+        aeroRouter: AERO_ROUTER,
         buyPresets: BUY_PRESETS.map((p) => `$${p.amount}(${(p.weight * 100).toFixed(0)}%)`).join(" "),
         walletWeights: WALLET_WEIGHTS2.map((w, i) => `W${i}:${(w * 100).toFixed(0)}%`).join(" "),
         sellProbBase: (SELL_PROBABILITY_BASE * 100).toFixed(0) + "%",
