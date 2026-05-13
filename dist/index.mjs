@@ -52296,10 +52296,11 @@ router2.get("/bot/status", (_req, res) => {
     },
     heartbeat: {
       targetToken: "0x38DcDB3A381677239BBc652aed9811F2f8496345",
-      buyAmountRangeUsd: { min: 0.01, max: 0.05 },
+      buyAmountRangeUsd: { min: 0.5, max: 1.5 },
+      dexRouting: "best-execution: Uniswap V3 / Aerodrome V1 / GBLIN contract (quoted in parallel, cheapest wins)",
       sellAmountRange: "15\u201385% of token holdings",
       sellProbability: "40% base (25\u201355% dynamic)",
-      intervalRangeMin: { night: "20\u201360", peak: "4\u201310", normal: "10\u201330" },
+      intervalRangeMin: { night: "60\u2013180", peak: "20\u201345", normal: "35\u201390" },
       nextTradeAt: state2.nextTradeAt,
       nextIntervalSec: state2.nextIntervalSec,
       totalTrades: state2.totalTrades,
