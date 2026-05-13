@@ -51156,6 +51156,8 @@ var isRunning = false;
 var prevEthPriceUsd = 0;
 var botStartedAt = null;
 var lastSellTimestamp = /* @__PURE__ */ new Map();
+var lastGblinBuyTimestamp = /* @__PURE__ */ new Map();
+var GBLIN_SELL_LOCK_MS = 2 * 60 * 1e3;
 var consecutiveBuys = /* @__PURE__ */ new Map();
 var walletRebalanceThreshold = /* @__PURE__ */ new Map();
 function rollRebalanceThreshold(walletIndex) {
@@ -51373,16 +51375,21 @@ async function findBestBuyVenue(ethWei) {
   );
   return results[0];
 }
-async function findBestSellVenue(gblinWei) {
+async function findBestSellVenue(gblinWei, walletIndex) {
+  const gblinLocked = walletIndex !== void 0 && Date.now() - (lastGblinBuyTimestamp.get(walletIndex) ?? 0) < GBLIN_SELL_LOCK_MS;
+  if (gblinLocked) {
+    const secsLeft = Math.ceil((GBLIN_SELL_LOCK_MS - (Date.now() - (lastGblinBuyTimestamp.get(walletIndex) ?? 0))) / 1e3);
+    logger.info({ walletIndex, secsLeft }, "GBLIN sell lock active \u2013 excluding GBLIN from sell venues");
+  }
   const [uni, aero, gblin] = await Promise.allSettled([
     quoteUniSell(gblinWei).then((a) => ({ venue: "uniswap", label: "Uniswap V3", amountOut: a })),
     quoteAerodromeSell(gblinWei).then((a) => ({ venue: "aerodrome", label: "Aerodrome V1", amountOut: a })),
-    quoteGblinContractSell(gblinWei).then((a) => ({ venue: "gblin", label: "GBLIN contract", amountOut: a }))
+    ...gblinLocked ? [] : [quoteGblinContractSell(gblinWei).then((a) => ({ venue: "gblin", label: "GBLIN contract", amountOut: a }))]
   ]);
   const results = [];
   if (uni.status === "fulfilled") results.push(uni.value);
   if (aero.status === "fulfilled") results.push(aero.value);
-  if (gblin.status === "fulfilled") results.push(gblin.value);
+  if (!gblinLocked && gblin?.status === "fulfilled") results.push(gblin.value);
   if (results.length === 0) throw new Error("All sell venues failed to quote");
   results.sort((a, b) => b.amountOut > a.amountOut ? 1 : -1);
   logger.info(
@@ -51764,6 +51771,7 @@ async function executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, m
     record.txHash = hash3;
     record.success = true;
     consecutiveBuys.set(wallet.index, (consecutiveBuys.get(wallet.index) ?? 0) + 1);
+    lastGblinBuyTimestamp.set(wallet.index, Date.now());
     logger.info({ hash: hash3, usd: usdAmount.toFixed(4), dex: "GBLIN contract" }, "BUY GBLIN contract confirmed \u2705");
   } catch (err) {
     record.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
@@ -51928,7 +51936,7 @@ async function bestExecutionSell(wallet, ethPriceUsd, manual = false) {
     };
   }
   logger.info({ wallet: wallet.address, tokenBal: tokenBalanceHuman, sellPct: (sellPct * 100).toFixed(1) + "%" }, "Quoting best sell venue...");
-  const best = await findBestSellVenue(sellAmount).catch(() => null);
+  const best = await findBestSellVenue(sellAmount, wallet.index).catch(() => null);
   if (!best) {
     logger.warn("All sell quotes failed \u2013 falling back to Uniswap V3");
     return executeSell(wallet, ethPriceUsd, true);
