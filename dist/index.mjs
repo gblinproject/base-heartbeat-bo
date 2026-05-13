@@ -51241,6 +51241,10 @@ function selectWalletIndex() {
   }
   return WALLET_WEIGHTS2.length - 1;
 }
+function selectBestFundedWallet() {
+  const ws = getOrCreateWallets();
+  return ws.reduce((best, w) => w.ethBalance > best.ethBalance ? w : best, ws[0]);
+}
 function selectBuyAmountUsd() {
   const r = Math.random();
   let cumulative = 0;
@@ -52178,8 +52182,7 @@ function triggerBuyNow() {
   logger.info("Manual BUY triggered (best execution)");
   getEthPriceUsd().then((p) => {
     state.ethPriceUsd = p;
-    const wallet = getOrCreateWallets()[selectWalletIndex()];
-    return bestExecutionBuy(wallet, p, true);
+    return bestExecutionBuy(selectBestFundedWallet(), p, true);
   }).then((r) => _recordTrade(r, "buy")).catch((err) => logger.error({ err }, "Manual BUY failed"));
 }
 function triggerSellNow() {
@@ -52187,8 +52190,7 @@ function triggerSellNow() {
   logger.info("Manual SELL triggered (best execution)");
   getEthPriceUsd().then((p) => {
     state.ethPriceUsd = p;
-    const wallet = getOrCreateWallets()[selectWalletIndex()];
-    return bestExecutionSell(wallet, p, true);
+    return bestExecutionSell(selectBestFundedWallet(), p, true);
   }).then((r) => _recordTrade(r, "sell")).catch((err) => logger.error({ err }, "Manual SELL failed"));
 }
 function triggerBuyUniswap() {
@@ -52196,8 +52198,7 @@ function triggerBuyUniswap() {
   logger.info("Manual BUY forced \u2192 Uniswap V3");
   getEthPriceUsd().then((p) => {
     state.ethPriceUsd = p;
-    const wallet = getOrCreateWallets()[selectWalletIndex()];
-    return executeBuy(wallet, p, true);
+    return executeBuy(selectBestFundedWallet(), p, true);
   }).then((r) => _recordTrade(r, "buy")).catch((err) => logger.error({ err }, "Manual BUY Uniswap failed"));
 }
 function triggerBuyAerodrome() {
@@ -52205,8 +52206,7 @@ function triggerBuyAerodrome() {
   logger.info("Manual BUY forced \u2192 Aerodrome V1");
   getEthPriceUsd().then((p) => {
     state.ethPriceUsd = p;
-    const wallet = getOrCreateWallets()[selectWalletIndex()];
-    return executeBuyAerodrome(wallet, p, true);
+    return executeBuyAerodrome(selectBestFundedWallet(), p, true);
   }).then((r) => _recordTrade(r, "buy")).catch((err) => logger.error({ err }, "Manual BUY Aerodrome failed"));
 }
 function triggerSellUniswap() {
@@ -52214,8 +52214,7 @@ function triggerSellUniswap() {
   logger.info("Manual SELL forced \u2192 Uniswap V3");
   getEthPriceUsd().then((p) => {
     state.ethPriceUsd = p;
-    const wallet = getOrCreateWallets()[selectWalletIndex()];
-    return executeSell(wallet, p, true);
+    return executeSell(selectBestFundedWallet(), p, true);
   }).then((r) => _recordTrade(r, "sell")).catch((err) => logger.error({ err }, "Manual SELL Uniswap failed"));
 }
 function triggerSellAerodrome() {
@@ -52223,8 +52222,7 @@ function triggerSellAerodrome() {
   logger.info("Manual SELL forced \u2192 Aerodrome V1");
   getEthPriceUsd().then((p) => {
     state.ethPriceUsd = p;
-    const wallet = getOrCreateWallets()[selectWalletIndex()];
-    return executeSellAerodrome(wallet, p, true);
+    return executeSellAerodrome(selectBestFundedWallet(), p, true);
   }).then((r) => _recordTrade(r, "sell")).catch((err) => logger.error({ err }, "Manual SELL Aerodrome failed"));
 }
 function triggerBuyGblinContract() {
@@ -52232,7 +52230,7 @@ function triggerBuyGblinContract() {
   logger.info("Manual BUY forced \u2192 GBLIN contract");
   getEthPriceUsd().then(async (p) => {
     state.ethPriceUsd = p;
-    const wallet = getOrCreateWallets()[selectWalletIndex()];
+    const wallet = selectBestFundedWallet();
     const usdAmount = selectBuyAmountUsd();
     const ethAmount = usdAmount / p;
     const ethWei = parseEther(ethAmount.toFixed(18));
@@ -52244,7 +52242,7 @@ function triggerSellGblinContract() {
   logger.info("Manual SELL forced \u2192 GBLIN contract");
   getEthPriceUsd().then(async (p) => {
     state.ethPriceUsd = p;
-    const wallet = getOrCreateWallets()[selectWalletIndex()];
+    const wallet = selectBestFundedWallet();
     const { raw: tokenBalanceRaw } = await getTokenBalance(wallet.address);
     if (tokenBalanceRaw === 0n) throw new Error("No token balance");
     const sellPct = randomBetween(SELL_PCT_MIN, SELL_PCT_MAX);
