@@ -51347,7 +51347,7 @@ async function quoteGblinContractBuy(ethWei) {
     functionName: "quoteBuyGBLIN",
     args: [safeEthWei]
   });
-  return gblinOut;
+  return gblinOut * 999n / 1000n;
 }
 async function quoteGblinContractSell(gblinWei) {
   return publicClient.readContract({
@@ -51763,8 +51763,8 @@ async function executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, m
       args: [0n],
       // minGblinOut = 0 (best-execution already verified)
       value: safeEthWei,
-      gas: 300000n,
-      // explicit limit — avoids auto-estimation revert
+      gas: 600000n,
+      // buyGBLIN does internal swaps — needs more gas
       gasPrice
     });
     await publicClient.waitForTransactionReceipt({ hash: hash3 });
