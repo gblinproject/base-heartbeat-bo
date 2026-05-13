@@ -52227,6 +52227,31 @@ function triggerSellAerodrome() {
     return executeSellAerodrome(wallet, p, true);
   }).then((r) => _recordTrade(r, "sell")).catch((err) => logger.error({ err }, "Manual SELL Aerodrome failed"));
 }
+function triggerBuyGblinContract() {
+  if (!isRunning) return;
+  logger.info("Manual BUY forced \u2192 GBLIN contract");
+  getEthPriceUsd().then(async (p) => {
+    state.ethPriceUsd = p;
+    const wallet = getOrCreateWallets()[selectWalletIndex()];
+    const usdAmount = selectBuyAmountUsd();
+    const ethAmount = usdAmount / p;
+    const ethWei = parseEther(ethAmount.toFixed(18));
+    return executeBuyGblinContract(wallet, p, ethWei, usdAmount, true);
+  }).then((r) => _recordTrade(r, "buy")).catch((err) => logger.error({ err }, "Manual BUY GBLIN contract failed"));
+}
+function triggerSellGblinContract() {
+  if (!isRunning) return;
+  logger.info("Manual SELL forced \u2192 GBLIN contract");
+  getEthPriceUsd().then(async (p) => {
+    state.ethPriceUsd = p;
+    const wallet = getOrCreateWallets()[selectWalletIndex()];
+    const { raw: tokenBalanceRaw } = await getTokenBalance(wallet.address);
+    if (tokenBalanceRaw === 0n) throw new Error("No token balance");
+    const sellPct = randomBetween(SELL_PCT_MIN, SELL_PCT_MAX);
+    const sellAmount = tokenBalanceRaw * BigInt(Math.floor(sellPct * 1e4)) / 10000n;
+    return executeSellGblinContract(wallet, p, sellAmount, true);
+  }).then((r) => _recordTrade(r, "sell")).catch((err) => logger.error({ err }, "Manual SELL GBLIN contract failed"));
+}
 function getMetrics() {
   const trades = state.recentTrades;
   const uptimeSec = botStartedAt ? Math.round((Date.now() - botStartedAt) / 1e3) : 0;
@@ -52352,6 +52377,16 @@ router2.post("/bot/sell-aerodrome", (_req, res) => {
   if (!guardRunning(res)) return;
   res.json({ message: "SELL forzato su Aerodrome V1 \u2014 controlla /api/bot/status tra qualche secondo" });
   triggerSellAerodrome();
+});
+router2.post("/bot/buy-gblin", (_req, res) => {
+  if (!guardRunning(res)) return;
+  res.json({ message: "BUY forzato su contratto GBLIN \u2014 controlla /api/bot/status tra qualche secondo" });
+  triggerBuyGblinContract();
+});
+router2.post("/bot/sell-gblin", (_req, res) => {
+  if (!guardRunning(res)) return;
+  res.json({ message: "SELL forzato su contratto GBLIN \u2014 controlla /api/bot/status tra qualche secondo" });
+  triggerSellGblinContract();
 });
 var bot_default = router2;
 
