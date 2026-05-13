@@ -50933,6 +50933,7 @@ var SELL_PCT_MAX = 0.85;
 var FUNDED_THRESHOLD_USD = 10;
 var POLLING_INTERVAL_MS = 60 * 1e3;
 var SELL_COOLDOWN_MS = 45 * 60 * 1e3;
+var GBLIN_MIN_ETH_WEI = parseEther("0.0005");
 var BUY_PRESETS = [
   { amount: 0.5, weight: 0.15 },
   { amount: 0.75, weight: 0.25 },
@@ -51337,11 +51338,12 @@ async function quoteAerodromeSell(gblinWei) {
   return amounts[amounts.length - 1];
 }
 async function quoteGblinContractBuy(ethWei) {
+  const safeEthWei = ethWei < GBLIN_MIN_ETH_WEI ? GBLIN_MIN_ETH_WEI : ethWei;
   const [gblinOut] = await publicClient.readContract({
     address: TOKEN_ADDRESS,
     abi: GBLIN_CONTRACT_ABI,
     functionName: "quoteBuyGBLIN",
-    args: [ethWei]
+    args: [safeEthWei]
   });
   return gblinOut;
 }
@@ -51739,7 +51741,12 @@ async function executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, m
     txHash: null,
     success: false
   };
-  logger.info({ wallet: wallet.address, usd: usdAmount.toFixed(4), dex: "GBLIN contract" }, "Executing BUY (GBLIN contract)...");
+  const safeEthWei = ethWei < GBLIN_MIN_ETH_WEI ? GBLIN_MIN_ETH_WEI : ethWei;
+  const safeEthAmount = Number(safeEthWei) / 1e18;
+  if (safeEthWei !== ethWei) {
+    logger.info({ original: ethAmount.toFixed(6), clamped: safeEthAmount.toFixed(6) }, "GBLIN buy clamped to minimum 0.0005 ETH");
+  }
+  logger.info({ wallet: wallet.address, usd: usdAmount.toFixed(4), ethWei: safeEthWei.toString(), dex: "GBLIN contract" }, "Executing BUY (GBLIN contract)...");
   try {
     const gasPrice = await getVariedGasPrice();
     const hash3 = await wallet.walletClient.writeContract({
@@ -51748,7 +51755,9 @@ async function executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, m
       functionName: "buyGBLIN",
       args: [0n],
       // minGblinOut = 0 (best-execution already verified)
-      value: ethWei,
+      value: safeEthWei,
+      gas: 300000n,
+      // explicit limit — avoids auto-estimation revert
       gasPrice
     });
     await publicClient.waitForTransactionReceipt({ hash: hash3 });
