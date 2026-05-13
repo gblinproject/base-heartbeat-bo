@@ -1,0 +1,3 @@
+wallet-data.json
+*.env
+.env*
