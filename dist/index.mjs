@@ -51790,39 +51790,69 @@ async function startBot() {
 function getBotState() {
   return { ...state };
 }
+function _recordTrade(record, type) {
+  state.lastTrade = record;
+  state.totalTrades += 1;
+  if (type === "buy") state.totalBuys += 1;
+  else state.totalSells += 1;
+  state.recentTrades = [record, ...state.recentTrades].slice(0, 200);
+  persistTrades();
+  refreshBalances(state.ethPriceUsd).catch(() => {
+  });
+}
 function triggerBuyNow() {
   if (!isRunning) return;
-  logger.info("Manual BUY triggered");
+  logger.info("Manual BUY triggered (random DEX)");
   getEthPriceUsd().then((p) => {
     state.ethPriceUsd = p;
-    const wallets2 = getOrCreateWallets();
-    const wallet = wallets2[selectWalletIndex()];
-    return executeBuy(wallet, p, true);
-  }).then(async (record) => {
-    state.lastTrade = record;
-    state.totalTrades += 1;
-    state.totalBuys += 1;
-    state.recentTrades = [record, ...state.recentTrades].slice(0, 200);
-    persistTrades();
-    await refreshBalances(state.ethPriceUsd);
-  }).catch((err) => logger.error({ err }, "Manual BUY failed"));
+    const wallet = getOrCreateWallets()[selectWalletIndex()];
+    return Math.random() < 0.5 ? executeBuyAerodrome(wallet, p, true) : executeBuy(wallet, p, true);
+  }).then((r) => _recordTrade(r, "buy")).catch((err) => logger.error({ err }, "Manual BUY failed"));
 }
 function triggerSellNow() {
   if (!isRunning) return;
-  logger.info("Manual SELL triggered");
+  logger.info("Manual SELL triggered (random DEX)");
   getEthPriceUsd().then((p) => {
     state.ethPriceUsd = p;
-    const wallets2 = getOrCreateWallets();
-    const wallet = wallets2[selectWalletIndex()];
+    const wallet = getOrCreateWallets()[selectWalletIndex()];
+    return Math.random() < 0.5 ? executeSellAerodrome(wallet, p, true) : executeSell(wallet, p, true);
+  }).then((r) => _recordTrade(r, "sell")).catch((err) => logger.error({ err }, "Manual SELL failed"));
+}
+function triggerBuyUniswap() {
+  if (!isRunning) return;
+  logger.info("Manual BUY forced \u2192 Uniswap V3");
+  getEthPriceUsd().then((p) => {
+    state.ethPriceUsd = p;
+    const wallet = getOrCreateWallets()[selectWalletIndex()];
+    return executeBuy(wallet, p, true);
+  }).then((r) => _recordTrade(r, "buy")).catch((err) => logger.error({ err }, "Manual BUY Uniswap failed"));
+}
+function triggerBuyAerodrome() {
+  if (!isRunning) return;
+  logger.info("Manual BUY forced \u2192 Aerodrome V1");
+  getEthPriceUsd().then((p) => {
+    state.ethPriceUsd = p;
+    const wallet = getOrCreateWallets()[selectWalletIndex()];
+    return executeBuyAerodrome(wallet, p, true);
+  }).then((r) => _recordTrade(r, "buy")).catch((err) => logger.error({ err }, "Manual BUY Aerodrome failed"));
+}
+function triggerSellUniswap() {
+  if (!isRunning) return;
+  logger.info("Manual SELL forced \u2192 Uniswap V3");
+  getEthPriceUsd().then((p) => {
+    state.ethPriceUsd = p;
+    const wallet = getOrCreateWallets()[selectWalletIndex()];
     return executeSell(wallet, p, true);
-  }).then(async (record) => {
-    state.lastTrade = record;
-    state.totalTrades += 1;
-    state.totalSells += 1;
-    state.recentTrades = [record, ...state.recentTrades].slice(0, 200);
-    persistTrades();
-    await refreshBalances(state.ethPriceUsd);
-  }).catch((err) => logger.error({ err }, "Manual SELL failed"));
+  }).then((r) => _recordTrade(r, "sell")).catch((err) => logger.error({ err }, "Manual SELL Uniswap failed"));
+}
+function triggerSellAerodrome() {
+  if (!isRunning) return;
+  logger.info("Manual SELL forced \u2192 Aerodrome V1");
+  getEthPriceUsd().then((p) => {
+    state.ethPriceUsd = p;
+    const wallet = getOrCreateWallets()[selectWalletIndex()];
+    return executeSellAerodrome(wallet, p, true);
+  }).then((r) => _recordTrade(r, "sell")).catch((err) => logger.error({ err }, "Manual SELL Aerodrome failed"));
 }
 function getMetrics() {
   const trades = state.recentTrades;
@@ -51912,23 +51942,42 @@ router2.get("/bot/status", (_req, res) => {
 router2.get("/bot/metrics", (_req, res) => {
   res.json(getMetrics());
 });
-router2.post("/bot/buy-now", (_req, res) => {
-  const state2 = getBotState();
-  if (state2.status !== "running") {
+function guardRunning(res) {
+  if (getBotState().status !== "running") {
     res.status(400).json({ error: "Bot non ancora avviato (wallet non finanziato)" });
-    return;
+    return false;
   }
-  res.json({ message: "BUY avviato \u2014 controlla /api/bot/status tra qualche secondo" });
+  return true;
+}
+router2.post("/bot/buy-now", (_req, res) => {
+  if (!guardRunning(res)) return;
+  res.json({ message: "BUY avviato (DEX casuale) \u2014 controlla /api/bot/status tra qualche secondo" });
   triggerBuyNow();
 });
 router2.post("/bot/sell-now", (_req, res) => {
-  const state2 = getBotState();
-  if (state2.status !== "running") {
-    res.status(400).json({ error: "Bot non ancora avviato (wallet non finanziato)" });
-    return;
-  }
-  res.json({ message: "SELL avviato \u2014 controlla /api/bot/status tra qualche secondo" });
+  if (!guardRunning(res)) return;
+  res.json({ message: "SELL avviato (DEX casuale) \u2014 controlla /api/bot/status tra qualche secondo" });
   triggerSellNow();
+});
+router2.post("/bot/buy-uniswap", (_req, res) => {
+  if (!guardRunning(res)) return;
+  res.json({ message: "BUY forzato su Uniswap V3 \u2014 controlla /api/bot/status tra qualche secondo" });
+  triggerBuyUniswap();
+});
+router2.post("/bot/buy-aerodrome", (_req, res) => {
+  if (!guardRunning(res)) return;
+  res.json({ message: "BUY forzato su Aerodrome V1 \u2014 controlla /api/bot/status tra qualche secondo" });
+  triggerBuyAerodrome();
+});
+router2.post("/bot/sell-uniswap", (_req, res) => {
+  if (!guardRunning(res)) return;
+  res.json({ message: "SELL forzato su Uniswap V3 \u2014 controlla /api/bot/status tra qualche secondo" });
+  triggerSellUniswap();
+});
+router2.post("/bot/sell-aerodrome", (_req, res) => {
+  if (!guardRunning(res)) return;
+  res.json({ message: "SELL forzato su Aerodrome V1 \u2014 controlla /api/bot/status tra qualche secondo" });
+  triggerSellAerodrome();
 });
 var bot_default = router2;
 
