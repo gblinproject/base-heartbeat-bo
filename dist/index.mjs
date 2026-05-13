@@ -52259,11 +52259,14 @@ function triggerSellGblinContract() {
   logger.info("Manual SELL forced \u2192 GBLIN contract");
   getEthPriceUsd().then(async (p) => {
     state.ethPriceUsd = p;
-    const wallet = selectBestFundedWallet();
-    const { raw: tokenBalanceRaw } = await getTokenBalance(wallet.address);
-    if (tokenBalanceRaw === 0n) throw new Error("No token balance");
+    const ws = getOrCreateWallets();
+    const balances = await Promise.all(ws.map((w) => getTokenBalance(w.address).then((b) => ({ w, raw: b.raw }))));
+    const best = balances.reduce((a, b) => b.raw > a.raw ? b : a, balances[0]);
+    const wallet = best.w;
+    if (best.raw === 0n) throw new Error("No token balance in any wallet");
     const sellPct = randomBetween(SELL_PCT_MIN, SELL_PCT_MAX);
-    const sellAmount = tokenBalanceRaw * BigInt(Math.floor(sellPct * 1e4)) / 10000n;
+    const sellAmount = best.raw * BigInt(Math.floor(sellPct * 1e4)) / 10000n;
+    logger.info({ wallet: wallet.address, tokens: formatUnits(best.raw, TOKEN_DECIMALS) }, "SELL GBLIN test \u2014 wallet selected by token balance");
     return executeSellGblinContract(wallet, p, sellAmount, true);
   }).then((r) => _recordTrade(r, "sell")).catch((err) => logger.error({ err }, "Manual SELL GBLIN contract failed"));
 }
