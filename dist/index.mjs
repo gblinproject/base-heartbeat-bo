@@ -50926,18 +50926,19 @@ var UNI_POOL_FEE = 300;
 var AERO_ROUTER = "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43";
 var AERO_FACTORY = "0x420DD381b31aEf6683db6B902084cB0FFECe40Da";
 var AERO_POOL = "0x7dcd4f5bcdae0546c84dab54401a93ad6e92ae1b";
+var UNI_QUOTER_V2 = "0x3d4e44Eb1374240CE5F1B136041461981153f70c";
 var SELL_PROBABILITY_BASE = 0.4;
 var SELL_PCT_MIN = 0.15;
 var SELL_PCT_MAX = 0.85;
-var FUNDED_THRESHOLD_USD = 5;
+var FUNDED_THRESHOLD_USD = 10;
 var POLLING_INTERVAL_MS = 60 * 1e3;
-var SELL_COOLDOWN_MS = 18 * 60 * 1e3;
+var SELL_COOLDOWN_MS = 45 * 60 * 1e3;
 var BUY_PRESETS = [
-  { amount: 0.01, weight: 0.2 },
-  { amount: 0.02, weight: 0.35 },
-  { amount: 0.03, weight: 0.28 },
-  { amount: 0.04, weight: 0.12 },
-  { amount: 0.05, weight: 0.05 }
+  { amount: 0.5, weight: 0.15 },
+  { amount: 0.75, weight: 0.25 },
+  { amount: 1, weight: 0.3 },
+  { amount: 1.25, weight: 0.2 },
+  { amount: 1.5, weight: 0.1 }
 ];
 var WALLET_WEIGHTS2 = [0.35, 0.3, 0.2, 0.15];
 var MIN_ETH_FOR_SELL = 5e-4;
@@ -51027,6 +51028,88 @@ var AERO_ROUTER_ABI = [
       { name: "deadline", type: "uint256" }
     ],
     outputs: [{ name: "amounts", type: "uint256[]" }]
+  }
+];
+var UNI_QUOTER_ABI = [
+  {
+    name: "quoteExactInputSingle",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [{
+      name: "params",
+      type: "tuple",
+      components: [
+        { name: "tokenIn", type: "address" },
+        { name: "tokenOut", type: "address" },
+        { name: "amountIn", type: "uint256" },
+        { name: "fee", type: "uint24" },
+        { name: "sqrtPriceLimitX96", type: "uint160" }
+      ]
+    }],
+    outputs: [
+      { name: "amountOut", type: "uint256" },
+      { name: "sqrtPriceX96After", type: "uint160" },
+      { name: "initializedTicksCrossed", type: "uint32" },
+      { name: "gasEstimate", type: "uint256" }
+    ]
+  }
+];
+var AERO_AMOUNTS_ABI = [
+  {
+    name: "getAmountsOut",
+    type: "function",
+    stateMutability: "view",
+    inputs: [
+      { name: "amountIn", type: "uint256" },
+      {
+        name: "routes",
+        type: "tuple[]",
+        components: [
+          { name: "from", type: "address" },
+          { name: "to", type: "address" },
+          { name: "stable", type: "bool" },
+          { name: "factory", type: "address" }
+        ]
+      }
+    ],
+    outputs: [{ name: "amounts", type: "uint256[]" }]
+  }
+];
+var GBLIN_CONTRACT_ABI = [
+  {
+    name: "buyGBLIN",
+    type: "function",
+    stateMutability: "payable",
+    inputs: [{ name: "minGblinOut", type: "uint256" }],
+    outputs: []
+  },
+  {
+    name: "sellGBLINForEth",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "gblinAmount", type: "uint256" },
+      { name: "minEthOut", type: "uint256" }
+    ],
+    outputs: []
+  },
+  {
+    name: "quoteBuyGBLIN",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "ethAmount", type: "uint256" }],
+    outputs: [
+      { name: "gblinOut", type: "uint256" },
+      { name: "wethToReserve", type: "uint256" },
+      { name: "fee", type: "uint256" }
+    ]
+  },
+  {
+    name: "quoteSellGBLIN",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "gblinAmount", type: "uint256" }],
+    outputs: [{ name: "ethOut", type: "uint256" }]
   }
 ];
 var ERC20_ABI = [
@@ -51127,14 +51210,14 @@ function getIntervalMs() {
   let minMs;
   let maxMs;
   if (isNight) {
-    minMs = 20 * 6e4;
-    maxMs = 60 * 6e4;
+    minMs = 60 * 6e4;
+    maxMs = 180 * 6e4;
   } else if (isPeak) {
-    minMs = 4 * 6e4;
-    maxMs = 10 * 6e4;
+    minMs = 20 * 6e4;
+    maxMs = 45 * 6e4;
   } else {
-    minMs = 10 * 6e4;
-    maxMs = 30 * 6e4;
+    minMs = 35 * 6e4;
+    maxMs = 90 * 6e4;
   }
   if (isWeekend) {
     minMs = Math.round(minMs * 1.5);
@@ -51169,8 +51252,8 @@ function selectBuyAmountUsd() {
       break;
     }
   }
-  const noise = (Math.random() - 0.5) * 8e-3;
-  return Math.max(8e-3, Math.min(0.058, base2 + noise));
+  const noise = (Math.random() - 0.5) * 0.12;
+  return Math.max(0.45, Math.min(1.55, base2 + noise));
 }
 async function applyJitter(manual = false) {
   if (manual) return;
@@ -51210,6 +51293,97 @@ async function getTokenBalance(address) {
     args: [address]
   });
   return { raw, human: formatUnits(raw, TOKEN_DECIMALS) };
+}
+async function quoteUniBuy(ethWei) {
+  const result = await publicClient.simulateContract({
+    address: UNI_QUOTER_V2,
+    abi: UNI_QUOTER_ABI,
+    functionName: "quoteExactInputSingle",
+    args: [{ tokenIn: WETH_ADDRESS, tokenOut: TOKEN_ADDRESS, amountIn: ethWei, fee: UNI_POOL_FEE, sqrtPriceLimitX96: 0n }]
+  });
+  return result.result[0];
+}
+async function quoteUniSell(gblinWei) {
+  const result = await publicClient.simulateContract({
+    address: UNI_QUOTER_V2,
+    abi: UNI_QUOTER_ABI,
+    functionName: "quoteExactInputSingle",
+    args: [{ tokenIn: TOKEN_ADDRESS, tokenOut: WETH_ADDRESS, amountIn: gblinWei, fee: UNI_POOL_FEE, sqrtPriceLimitX96: 0n }]
+  });
+  return result.result[0];
+}
+var AERO_ROUTE_BUY = [{ from: WETH_ADDRESS, to: TOKEN_ADDRESS, stable: false, factory: AERO_FACTORY }];
+var AERO_ROUTE_SELL = [{ from: TOKEN_ADDRESS, to: WETH_ADDRESS, stable: false, factory: AERO_FACTORY }];
+async function quoteAerodromeBuy(ethWei) {
+  const amounts = await publicClient.readContract({
+    address: AERO_ROUTER,
+    abi: AERO_AMOUNTS_ABI,
+    functionName: "getAmountsOut",
+    args: [ethWei, AERO_ROUTE_BUY]
+  });
+  return amounts[amounts.length - 1];
+}
+async function quoteAerodromeSell(gblinWei) {
+  const amounts = await publicClient.readContract({
+    address: AERO_ROUTER,
+    abi: AERO_AMOUNTS_ABI,
+    functionName: "getAmountsOut",
+    args: [gblinWei, AERO_ROUTE_SELL]
+  });
+  return amounts[amounts.length - 1];
+}
+async function quoteGblinContractBuy(ethWei) {
+  const [gblinOut] = await publicClient.readContract({
+    address: TOKEN_ADDRESS,
+    abi: GBLIN_CONTRACT_ABI,
+    functionName: "quoteBuyGBLIN",
+    args: [ethWei]
+  });
+  return gblinOut;
+}
+async function quoteGblinContractSell(gblinWei) {
+  return publicClient.readContract({
+    address: TOKEN_ADDRESS,
+    abi: GBLIN_CONTRACT_ABI,
+    functionName: "quoteSellGBLIN",
+    args: [gblinWei]
+  });
+}
+async function findBestBuyVenue(ethWei) {
+  const [uni, aero, gblin] = await Promise.allSettled([
+    quoteUniBuy(ethWei).then((a) => ({ venue: "uniswap", label: "Uniswap V3", amountOut: a })),
+    quoteAerodromeBuy(ethWei).then((a) => ({ venue: "aerodrome", label: "Aerodrome V1", amountOut: a })),
+    quoteGblinContractBuy(ethWei).then((a) => ({ venue: "gblin", label: "GBLIN contract", amountOut: a }))
+  ]);
+  const results = [];
+  if (uni.status === "fulfilled") results.push(uni.value);
+  if (aero.status === "fulfilled") results.push(aero.value);
+  if (gblin.status === "fulfilled") results.push(gblin.value);
+  if (results.length === 0) throw new Error("All buy venues failed to quote");
+  results.sort((a, b) => b.amountOut > a.amountOut ? 1 : -1);
+  logger.info(
+    { quotes: results.map((r) => `${r.label}: ${formatUnits(r.amountOut, TOKEN_DECIMALS)} GBLIN`), winner: results[0].label },
+    "Best execution BUY quote"
+  );
+  return results[0];
+}
+async function findBestSellVenue(gblinWei) {
+  const [uni, aero, gblin] = await Promise.allSettled([
+    quoteUniSell(gblinWei).then((a) => ({ venue: "uniswap", label: "Uniswap V3", amountOut: a })),
+    quoteAerodromeSell(gblinWei).then((a) => ({ venue: "aerodrome", label: "Aerodrome V1", amountOut: a })),
+    quoteGblinContractSell(gblinWei).then((a) => ({ venue: "gblin", label: "GBLIN contract", amountOut: a }))
+  ]);
+  const results = [];
+  if (uni.status === "fulfilled") results.push(uni.value);
+  if (aero.status === "fulfilled") results.push(aero.value);
+  if (gblin.status === "fulfilled") results.push(gblin.value);
+  if (results.length === 0) throw new Error("All sell venues failed to quote");
+  results.sort((a, b) => b.amountOut > a.amountOut ? 1 : -1);
+  logger.info(
+    { quotes: results.map((r) => `${r.label}: ${formatUnits(r.amountOut, 18)} ETH`), winner: results[0].label },
+    "Best execution SELL quote"
+  );
+  return results[0];
 }
 function encodeExactInputSingle(params) {
   return encodeFunctionData({
@@ -51547,6 +51721,209 @@ async function executeSell(wallet, ethPriceUsd, manual = false) {
   });
   return record;
 }
+async function executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, manual = false) {
+  const ethAmount = Number(ethWei) / 1e18;
+  const record = {
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    type: "buy",
+    walletIndex: wallet.index,
+    walletAddress: wallet.address,
+    ethAmount,
+    usdAmount,
+    tokenAmount: "0",
+    ethPriceUsd,
+    txHash: null,
+    success: false
+  };
+  logger.info({ wallet: wallet.address, usd: usdAmount.toFixed(4), dex: "GBLIN contract" }, "Executing BUY (GBLIN contract)...");
+  try {
+    const gasPrice = await getVariedGasPrice();
+    const hash3 = await wallet.walletClient.writeContract({
+      address: TOKEN_ADDRESS,
+      abi: GBLIN_CONTRACT_ABI,
+      functionName: "buyGBLIN",
+      args: [0n],
+      // minGblinOut = 0 (best-execution already verified)
+      value: ethWei,
+      gasPrice
+    });
+    await publicClient.waitForTransactionReceipt({ hash: hash3 });
+    record.txHash = hash3;
+    record.success = true;
+    consecutiveBuys.set(wallet.index, (consecutiveBuys.get(wallet.index) ?? 0) + 1);
+    logger.info({ hash: hash3, usd: usdAmount.toFixed(4), dex: "GBLIN contract" }, "BUY GBLIN contract confirmed \u2705");
+  } catch (err) {
+    record.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
+    logger.error({ err }, "BUY GBLIN contract failed");
+  }
+  sendTradeAlert(record).catch(() => {
+  });
+  return record;
+}
+async function executeSellGblinContract(wallet, ethPriceUsd, sellAmount, manual = false) {
+  const record = {
+    timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+    type: "sell",
+    walletIndex: wallet.index,
+    walletAddress: wallet.address,
+    ethAmount: 0,
+    usdAmount: 0,
+    tokenAmount: formatUnits(sellAmount, TOKEN_DECIMALS),
+    ethPriceUsd,
+    txHash: null,
+    success: false
+  };
+  logger.info({ wallet: wallet.address, tokens: record.tokenAmount, dex: "GBLIN contract" }, "Executing SELL (GBLIN contract)...");
+  try {
+    const approveGasPrice = await getVariedGasPrice();
+    const approveHash = await wallet.walletClient.writeContract({
+      address: TOKEN_ADDRESS,
+      abi: ERC20_ABI,
+      functionName: "approve",
+      args: [TOKEN_ADDRESS, sellAmount],
+      gasPrice: approveGasPrice
+    });
+    const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
+    if (approveReceipt.status === "reverted") throw new Error(`approve reverted (${approveHash})`);
+    await sleep(2e3);
+    const ethBeforeSwap = await publicClient.getBalance({ address: wallet.address });
+    const swapGasPrice = await getVariedGasPrice();
+    const swapHash = await wallet.walletClient.writeContract({
+      address: TOKEN_ADDRESS,
+      abi: GBLIN_CONTRACT_ABI,
+      functionName: "sellGBLINForEth",
+      args: [sellAmount, 0n],
+      // minEthOut = 0 (best-execution already verified)
+      gasPrice: swapGasPrice
+    });
+    const swapReceipt = await publicClient.waitForTransactionReceipt({ hash: swapHash });
+    const ethAfterSwap = await publicClient.getBalance({ address: wallet.address });
+    const gasCostWei = swapReceipt.gasUsed * (swapReceipt.effectiveGasPrice ?? swapGasPrice);
+    const ethReceivedWei = ethAfterSwap + gasCostWei > ethBeforeSwap ? ethAfterSwap + gasCostWei - ethBeforeSwap : 0n;
+    const ethReceived = Number(ethReceivedWei) / 1e18;
+    record.txHash = swapHash;
+    record.ethAmount = ethReceived;
+    record.usdAmount = ethReceived * ethPriceUsd;
+    record.success = true;
+    lastSellTimestamp.set(wallet.index, Date.now());
+    consecutiveBuys.set(wallet.index, 0);
+    rollRebalanceThreshold(wallet.index);
+    logger.info({ swapHash, tokensSold: record.tokenAmount, dex: "GBLIN contract" }, "SELL GBLIN contract confirmed \u2705");
+  } catch (err) {
+    record.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
+    logger.error({ err }, "SELL GBLIN contract failed");
+  }
+  sendTradeAlert(record).catch(() => {
+  });
+  return record;
+}
+async function bestExecutionBuy(wallet, ethPriceUsd, manual = false) {
+  await applyJitter(manual);
+  const usdAmount = selectBuyAmountUsd();
+  const ethAmount = usdAmount / ethPriceUsd;
+  const ethWei = parseEther(ethAmount.toFixed(18));
+  const ethBalance = await getEthBalance(wallet.address);
+  if (ethBalance < ethAmount + 2e-4) {
+    return {
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      type: "buy",
+      walletIndex: wallet.index,
+      walletAddress: wallet.address,
+      ethAmount,
+      usdAmount,
+      tokenAmount: "0",
+      ethPriceUsd,
+      txHash: null,
+      success: false,
+      error: `Low ETH balance: ${ethBalance.toFixed(6)} ETH`
+    };
+  }
+  const best = await findBestBuyVenue(ethWei).catch(() => null);
+  if (!best) {
+    logger.warn("All buy quotes failed \u2013 falling back to Uniswap V3");
+    return executeBuy(wallet, ethPriceUsd, true);
+  }
+  if (best.venue === "gblin") return executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, manual);
+  if (best.venue === "aerodrome") return executeBuyAerodrome(wallet, ethPriceUsd, manual);
+  return executeBuy(wallet, ethPriceUsd, manual);
+}
+async function bestExecutionSell(wallet, ethPriceUsd, manual = false) {
+  await applyJitter(manual);
+  const { raw: tokenBalanceRaw, human: tokenBalanceHuman } = await getTokenBalance(wallet.address);
+  if (tokenBalanceRaw === 0n) {
+    return {
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      type: "sell",
+      walletIndex: wallet.index,
+      walletAddress: wallet.address,
+      ethAmount: 0,
+      usdAmount: 0,
+      tokenAmount: "0",
+      ethPriceUsd,
+      txHash: null,
+      success: false,
+      error: "No token balance to sell"
+    };
+  }
+  const ethBalance = await getEthBalance(wallet.address);
+  if (ethBalance < MIN_ETH_FOR_SELL) {
+    return {
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      type: "sell",
+      walletIndex: wallet.index,
+      walletAddress: wallet.address,
+      ethAmount: 0,
+      usdAmount: 0,
+      tokenAmount: "0",
+      ethPriceUsd,
+      txHash: null,
+      success: false,
+      error: `Low ETH for gas: ${ethBalance.toFixed(6)} ETH (need ${MIN_ETH_FOR_SELL})`
+    };
+  }
+  const lastSell = lastSellTimestamp.get(wallet.index) ?? 0;
+  if (Date.now() - lastSell < SELL_COOLDOWN_MS) {
+    return {
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      type: "sell",
+      walletIndex: wallet.index,
+      walletAddress: wallet.address,
+      ethAmount: 0,
+      usdAmount: 0,
+      tokenAmount: "0",
+      ethPriceUsd,
+      txHash: null,
+      success: false,
+      error: "Sell cooldown active for this wallet"
+    };
+  }
+  const sellPct = randomBetween(SELL_PCT_MIN, SELL_PCT_MAX);
+  const sellAmount = tokenBalanceRaw * BigInt(Math.floor(sellPct * 1e4)) / 10000n;
+  if (sellAmount === 0n) {
+    return {
+      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+      type: "sell",
+      walletIndex: wallet.index,
+      walletAddress: wallet.address,
+      ethAmount: 0,
+      usdAmount: 0,
+      tokenAmount: "0",
+      ethPriceUsd,
+      txHash: null,
+      success: false,
+      error: "Sell amount too small"
+    };
+  }
+  logger.info({ wallet: wallet.address, tokenBal: tokenBalanceHuman, sellPct: (sellPct * 100).toFixed(1) + "%" }, "Quoting best sell venue...");
+  const best = await findBestSellVenue(sellAmount).catch(() => null);
+  if (!best) {
+    logger.warn("All sell quotes failed \u2013 falling back to Uniswap V3");
+    return executeSell(wallet, ethPriceUsd, true);
+  }
+  if (best.venue === "gblin") return executeSellGblinContract(wallet, ethPriceUsd, sellAmount, manual);
+  if (best.venue === "aerodrome") return executeSellAerodrome(wallet, ethPriceUsd, manual);
+  return executeSell(wallet, ethPriceUsd, manual);
+}
 var SKIP_ERRORS = [
   "No token balance",
   "Low ETH balance",
@@ -51597,9 +51974,9 @@ async function executeTrade(ethPriceUsd) {
         consecutiveBuys: consecutiveBuys.get(rebalanceCandidate.index),
         threshold: getRebalanceThreshold(rebalanceCandidate.index)
       },
-      "Rebalance: forcing SELL after threshold reached"
+      "Rebalance: forcing SELL (best execution)"
     );
-    return withRetry2(() => executeSell(rebalanceCandidate, ethPriceUsd));
+    return withRetry2(() => bestExecutionSell(rebalanceCandidate, ethPriceUsd));
   }
   const sellProb = currentSellProbability(ethPriceUsd);
   const isSell = Math.random() < sellProb;
@@ -51621,19 +51998,15 @@ async function executeTrade(ethPriceUsd) {
           break;
         }
       }
-      logger.info({ sellProbability: (sellProb * 100).toFixed(0) + "%" }, "Trade type: SELL");
-      const useAeroSell = Math.random() < 0.5;
-      return withRetry2(
-        () => useAeroSell ? executeSellAerodrome(chosen, ethPriceUsd) : executeSell(chosen, ethPriceUsd)
-      );
+      logger.info({ sellProbability: (sellProb * 100).toFixed(0) + "%" }, "Trade type: SELL (best execution)");
+      return withRetry2(() => bestExecutionSell(chosen, ethPriceUsd));
     }
     logger.info("All wallets in sell cooldown \u2013 falling back to BUY");
   }
   const walletIdx = selectWalletIndex();
   const wallet = wallets2[walletIdx];
-  const useAerodrome = Math.random() < 0.5;
-  logger.info({ sellProbability: (sellProb * 100).toFixed(0) + "%", dex: useAerodrome ? "Aerodrome" : "Uniswap" }, "Trade type: BUY");
-  return useAerodrome ? withRetry2(() => executeBuyAerodrome(wallet, ethPriceUsd)) : withRetry2(() => executeBuy(wallet, ethPriceUsd));
+  logger.info({ sellProbability: (sellProb * 100).toFixed(0) + "%" }, "Trade type: BUY (best execution)");
+  return withRetry2(() => bestExecutionBuy(wallet, ethPriceUsd));
 }
 async function refreshBalances(ethPriceUsd) {
   const ws = getOrCreateWallets();
@@ -51802,20 +52175,20 @@ function _recordTrade(record, type) {
 }
 function triggerBuyNow() {
   if (!isRunning) return;
-  logger.info("Manual BUY triggered (random DEX)");
+  logger.info("Manual BUY triggered (best execution)");
   getEthPriceUsd().then((p) => {
     state.ethPriceUsd = p;
     const wallet = getOrCreateWallets()[selectWalletIndex()];
-    return Math.random() < 0.5 ? executeBuyAerodrome(wallet, p, true) : executeBuy(wallet, p, true);
+    return bestExecutionBuy(wallet, p, true);
   }).then((r) => _recordTrade(r, "buy")).catch((err) => logger.error({ err }, "Manual BUY failed"));
 }
 function triggerSellNow() {
   if (!isRunning) return;
-  logger.info("Manual SELL triggered (random DEX)");
+  logger.info("Manual SELL triggered (best execution)");
   getEthPriceUsd().then((p) => {
     state.ethPriceUsd = p;
     const wallet = getOrCreateWallets()[selectWalletIndex()];
-    return Math.random() < 0.5 ? executeSellAerodrome(wallet, p, true) : executeSell(wallet, p, true);
+    return bestExecutionSell(wallet, p, true);
   }).then((r) => _recordTrade(r, "sell")).catch((err) => logger.error({ err }, "Manual SELL failed"));
 }
 function triggerBuyUniswap() {
