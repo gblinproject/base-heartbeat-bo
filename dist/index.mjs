@@ -50934,6 +50934,7 @@ var FUNDED_THRESHOLD_USD = 10;
 var POLLING_INTERVAL_MS = 60 * 1e3;
 var SELL_COOLDOWN_MS = 45 * 60 * 1e3;
 var GBLIN_MIN_ETH_WEI = parseEther("0.0005");
+var GBLIN_CONTRACT_DAILY_BUY_LIMIT = 1;
 var BUY_PRESETS = [
   { amount: 0.5, weight: 0.15 },
   { amount: 0.75, weight: 0.25 },
@@ -51158,6 +51159,27 @@ var botStartedAt = null;
 var lastSellTimestamp = /* @__PURE__ */ new Map();
 var lastGblinBuyTimestamp = /* @__PURE__ */ new Map();
 var GBLIN_SELL_LOCK_MS = 2 * 60 * 1e3;
+var gblinContractBuyCountToday = 0;
+var gblinContractBuyDayKey = "";
+function getUtcDateKey() {
+  return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
+}
+function isGblinContractBuyAllowed() {
+  const today = getUtcDateKey();
+  if (gblinContractBuyDayKey !== today) {
+    gblinContractBuyCountToday = 0;
+    gblinContractBuyDayKey = today;
+  }
+  return gblinContractBuyCountToday < GBLIN_CONTRACT_DAILY_BUY_LIMIT;
+}
+function recordGblinContractBuyUsed() {
+  const today = getUtcDateKey();
+  if (gblinContractBuyDayKey !== today) {
+    gblinContractBuyCountToday = 0;
+    gblinContractBuyDayKey = today;
+  }
+  gblinContractBuyCountToday++;
+}
 var consecutiveBuys = /* @__PURE__ */ new Map();
 var walletRebalanceThreshold = /* @__PURE__ */ new Map();
 function rollRebalanceThreshold(walletIndex) {
@@ -51357,16 +51379,22 @@ async function quoteGblinContractSell(gblinWei) {
     args: [gblinWei]
   });
 }
-async function findBestBuyVenue(ethWei) {
+async function findBestBuyVenue(ethWei, excludeGblin = false) {
+  if (excludeGblin) {
+    logger.info(
+      { gblinCountToday: gblinContractBuyCountToday, limit: GBLIN_CONTRACT_DAILY_BUY_LIMIT },
+      "GBLIN contract daily limit reached \u2013 excluding from buy quotes (DEX pools only)"
+    );
+  }
   const [uni, aero, gblin] = await Promise.allSettled([
     quoteUniBuy(ethWei).then((a) => ({ venue: "uniswap", label: "Uniswap V3", amountOut: a })),
     quoteAerodromeBuy(ethWei).then((a) => ({ venue: "aerodrome", label: "Aerodrome V1", amountOut: a })),
-    quoteGblinContractBuy(ethWei).then((a) => ({ venue: "gblin", label: "GBLIN contract", amountOut: a }))
+    ...excludeGblin ? [] : [quoteGblinContractBuy(ethWei).then((a) => ({ venue: "gblin", label: "GBLIN contract", amountOut: a }))]
   ]);
   const results = [];
   if (uni.status === "fulfilled") results.push(uni.value);
   if (aero.status === "fulfilled") results.push(aero.value);
-  if (gblin.status === "fulfilled") results.push(gblin.value);
+  if (!excludeGblin && gblin?.status === "fulfilled") results.push(gblin.value);
   if (results.length === 0) throw new Error("All buy venues failed to quote");
   results.sort((a, b) => b.amountOut > a.amountOut ? 1 : -1);
   logger.info(
@@ -51772,7 +51800,8 @@ async function executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, m
     record.success = true;
     consecutiveBuys.set(wallet.index, (consecutiveBuys.get(wallet.index) ?? 0) + 1);
     lastGblinBuyTimestamp.set(wallet.index, Date.now());
-    logger.info({ hash: hash3, usd: usdAmount.toFixed(4), dex: "GBLIN contract" }, "BUY GBLIN contract confirmed \u2705");
+    recordGblinContractBuyUsed();
+    logger.info({ hash: hash3, usd: usdAmount.toFixed(4), dex: "GBLIN contract", gblinBuysToday: gblinContractBuyCountToday }, "BUY GBLIN contract confirmed \u2705");
   } catch (err) {
     record.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
     logger.error({ err }, "BUY GBLIN contract failed");
@@ -51859,7 +51888,8 @@ async function bestExecutionBuy(wallet, ethPriceUsd, manual = false) {
       error: `Low ETH balance: ${ethBalance.toFixed(6)} ETH`
     };
   }
-  const best = await findBestBuyVenue(ethWei).catch(() => null);
+  const gblinAllowed = isGblinContractBuyAllowed();
+  const best = await findBestBuyVenue(ethWei, !gblinAllowed).catch(() => null);
   if (!best) {
     logger.warn("All buy quotes failed \u2013 falling back to Uniswap V3");
     return executeBuy(wallet, ethPriceUsd, true);
