@@ -52210,8 +52210,11 @@ async function startBot() {
       address: w.address,
       ethBalance: 0,
       usdBalance: 0,
-      tokenBalance: "0"
+      tokenBalance: "0",
+      tokenBalanceUsd: 0
     }));
+    getGblinPriceUsd().catch(() => {
+    });
     state.status = "waiting_for_funds";
     logger.info(
       {
