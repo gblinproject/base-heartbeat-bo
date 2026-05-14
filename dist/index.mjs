@@ -51486,7 +51486,8 @@ async function executeBuy(wallet, ethPriceUsd, manual = false) {
     usdAmount,
     ethPriceUsd,
     txHash: null,
-    success: false
+    success: false,
+    dex: "Uniswap V3"
   };
   const ethBalance = await getEthBalance(wallet.address);
   if (ethBalance < ethAmount + 1e-4) {
@@ -51549,7 +51550,8 @@ async function executeBuyAerodrome(wallet, ethPriceUsd, manual = false) {
     tokenAmount: "0",
     ethPriceUsd,
     txHash: null,
-    success: false
+    success: false,
+    dex: "Aerodrome"
   };
   const ethBalance = await getEthBalance(wallet.address);
   if (ethBalance < ethAmount + 1e-4) {
@@ -51598,7 +51600,8 @@ async function executeSellAerodrome(wallet, ethPriceUsd, manual = false) {
     tokenAmount: "0",
     ethPriceUsd,
     txHash: null,
-    success: false
+    success: false,
+    dex: "Aerodrome"
   };
   if (tokenBalanceRaw === 0n) {
     record.error = "No token balance to sell";
@@ -51684,7 +51687,8 @@ async function executeSell(wallet, ethPriceUsd, manual = false) {
     tokenAmount: "0",
     ethPriceUsd,
     txHash: null,
-    success: false
+    success: false,
+    dex: "Uniswap V3"
   };
   if (tokenBalanceRaw === 0n) {
     record.error = "No token balance to sell";
@@ -51797,7 +51801,8 @@ async function executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, m
     tokenAmount: "0",
     ethPriceUsd,
     txHash: null,
-    success: false
+    success: false,
+    dex: "GBLIN"
   };
   const safeEthWei = ethWei < GBLIN_MIN_ETH_WEI ? GBLIN_MIN_ETH_WEI : ethWei;
   const safeEthAmount = Number(safeEthWei) / 1e18;
@@ -51844,7 +51849,8 @@ async function executeSellGblinContract(wallet, ethPriceUsd, sellAmount, manual 
     tokenAmount: formatUnits(sellAmount, TOKEN_DECIMALS),
     ethPriceUsd,
     txHash: null,
-    success: false
+    success: false,
+    dex: "GBLIN"
   };
   logger.info({ wallet: wallet.address, tokens: record.tokenAmount, dex: "GBLIN contract" }, "Executing SELL (GBLIN contract)...");
   try {

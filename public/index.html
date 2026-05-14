@@ -26,12 +26,19 @@
     .wallet-usd { font-size: 0.7rem; color: #6b7280; border-top: 1px solid #1f2937; padding-top: 4px; margin-top: 2px; }
     .trades { background: #111827; border: 1px solid #1f2937; border-radius: 10px; padding: 18px; }
     .trades-title { font-size: 0.65rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 14px; }
-    .trade-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #1f2937; font-size: 0.75rem; }
+    .trade-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #1f2937; font-size: 0.75rem; gap: 8px; }
     .trade-row:last-child { border-bottom: none; }
-    .buy { color: #34d399; }
-    .sell { color: #f87171; }
+    .trade-left { display: flex; align-items: center; gap: 8px; min-width: 80px; }
+    .trade-mid { flex: 1; color: #9ca3af; }
+    .trade-right { display: flex; align-items: center; gap: 8px; }
+    .buy { color: #34d399; font-weight: 700; }
+    .sell { color: #f87171; font-weight: 700; }
     .skip { color: #6b7280; }
     .trade-ts { color: #4b5563; font-size: 0.65rem; }
+    .dex-badge { font-size: 0.6rem; padding: 1px 6px; border-radius: 4px; font-weight: 600; letter-spacing: 0.03em; white-space: nowrap; }
+    .dex-uni   { background: #1a0a3d; color: #a78bfa; border: 1px solid #4c1d95; }
+    .dex-aero  { background: #0a1f3d; color: #60a5fa; border: 1px solid #1e3a5f; }
+    .dex-gblin { background: #0a2a1a; color: #34d399; border: 1px solid #065f46; }
     .next { font-size: 0.75rem; color: #9ca3af; margin-top: 4px; }
     .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #34d399; margin-right: 6px; animation: pulse 2s infinite; }
     @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
@@ -138,14 +145,21 @@
             '</div>';
         }).join('');
 
-        const trades = s.recentTrades ?? [];
+        const allTrades = s.recentTrades ?? [];
+        const trades = allTrades.filter(t => t.success === true).slice(0, 10);
         document.getElementById('trade-list').innerHTML = trades.length === 0
           ? '<div style="color:#4b5563;font-size:0.75rem">Nessun trade ancora</div>'
-          : trades.slice(0, 15).map(t => {
-              const cls = t.type === 'buy' ? 'buy' : t.type === 'sell' ? 'sell' : 'skip';
-              const w = 'W' + (t.walletIndex ?? '?');
-              const amt = t.usdAmount ? '$' + t.usdAmount.toFixed(3) : '';
-              return '<div class="trade-row"><span class="' + cls + '">' + t.type.toUpperCase() + '</span><span>' + w + ' ' + amt + '</span><span class="trade-ts">' + fmt(t.timestamp) + '</span></div>';
+          : trades.map(t => {
+              const cls  = t.type === 'buy' ? 'buy' : 'sell';
+              const w    = 'W' + (t.walletIndex ?? '?');
+              const amt  = t.usdAmount ? '$' + t.usdAmount.toFixed(2) : '';
+              const dexCls = t.dex === 'Uniswap V3' ? 'dex-uni' : t.dex === 'Aerodrome' ? 'dex-aero' : t.dex === 'GBLIN' ? 'dex-gblin' : '';
+              const dexBadge = t.dex ? '<span class="dex-badge ' + dexCls + '">' + t.dex + '</span>' : '';
+              return '<div class="trade-row">' +
+                '<div class="trade-left"><span class="' + cls + '">' + t.type.toUpperCase() + '</span>' + dexBadge + '</div>' +
+                '<div class="trade-mid">' + w + '  ' + amt + '</div>' +
+                '<div class="trade-right"><span class="trade-ts">' + fmt(t.timestamp) + '</span></div>' +
+              '</div>';
             }).join('');
 
         document.getElementById('err').textContent = '';

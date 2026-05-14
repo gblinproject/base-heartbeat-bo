@@ -318,6 +318,7 @@ export interface TradeRecord {
   txHash:        string | null;
   success:       boolean;
   error?:        string;
+  dex?:          string;
 }
 
 interface WalletInfo {
@@ -879,6 +880,7 @@ async function executeBuy(
     ethPriceUsd,
     txHash:  null,
     success: false,
+    dex:     "Uniswap V3",
   };
 
   const ethBalance = await getEthBalance(wallet.address);
@@ -955,6 +957,7 @@ async function executeBuyAerodrome(
     ethPriceUsd,
     txHash:        null,
     success:       false,
+    dex:           "Aerodrome",
   };
 
   const ethBalance = await getEthBalance(wallet.address);
@@ -1015,6 +1018,7 @@ async function executeSellAerodrome(
     ethPriceUsd,
     txHash:        null,
     success:       false,
+    dex:           "Aerodrome",
   };
 
   if (tokenBalanceRaw === 0n) {
@@ -1113,6 +1117,7 @@ async function executeSell(
     ethPriceUsd,
     txHash:  null,
     success: false,
+    dex:     "Uniswap V3",
   };
 
   if (tokenBalanceRaw === 0n) {
@@ -1255,6 +1260,7 @@ async function executeBuyGblinContract(
     ethPriceUsd,
     txHash:        null,
     success:       false,
+    dex:           "GBLIN",
   };
 
   // Enforce contract minimum: 0.0005 ETH
@@ -1312,6 +1318,7 @@ async function executeSellGblinContract(
     ethPriceUsd,
     txHash:        null,
     success:       false,
+    dex:           "GBLIN",
   };
 
   logger.info({ wallet: wallet.address, tokens: record.tokenAmount, dex: "GBLIN contract" }, "Executing SELL (GBLIN contract)...");
