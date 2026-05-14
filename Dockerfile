@@ -1,10 +1,14 @@
 FROM node:20-alpine
 WORKDIR /app
 
+# Cache-bust: 20260514083428
+ARG CACHEBUST=20260514083428
+RUN echo build
+
 COPY dist/ ./dist/
 COPY public/ ./public/
 
-RUN echo '{"trades":[],"totalTrades":0,"totalBuys":0,"totalSells":0}' > /trades.json
+RUN echo '{'trades':[],'totalTrades':\0,'totalBuys':\0,'totalSells':\0}' > /trades.json
 
 ENV NODE_ENV=production
 ENV PORT=8080
