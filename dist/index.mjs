@@ -52096,13 +52096,18 @@ async function refreshBalances(ethPriceUsd) {
   }
   state.wallets = results;
 }
+var MAX_INTERVAL_MS = 120 * 6e4;
 async function scheduleNextTrade() {
   if (!isRunning) return;
   let intervalMs = getIntervalMs();
   if (Math.random() < 0.15) {
-    const restMultiplier = randomBetween(1.5, 3);
+    const restMultiplier = randomBetween(1.5, 2);
     intervalMs = Math.round(intervalMs * restMultiplier);
     logger.info({ restMultiplier: restMultiplier.toFixed(2) }, "Unplanned break \u2013 extending interval");
+  }
+  if (intervalMs > MAX_INTERVAL_MS) {
+    logger.info({ cappedFrom: Math.round(intervalMs / 6e4) + " min", cappedTo: "120 min" }, "Interval capped at maximum");
+    intervalMs = MAX_INTERVAL_MS;
   }
   const intervalSec = Math.round(intervalMs / 1e3);
   const nextAt = new Date(Date.now() + intervalMs).toISOString();
