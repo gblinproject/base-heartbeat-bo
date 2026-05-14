@@ -24,7 +24,8 @@ const WETH_ADDRESS  = "0x4200000000000000000000000000000000000006" as `0x${strin
 /** Uniswap V3 SwapRouter on Base — used for both BUY and SELL */
 const UNI_ROUTER  = "0x2626664c2603336E57B271c5C0b26F421741e481" as `0x${string}`;
 
-/** Uniswap V3 pool: TOKEN/WETH 0.03% */
+/** Uniswap V3 GBLIN/WETH pool on Base (fee 300 = 0.03%) */
+const UNI_POOL     = "0x8fdda852a7b106b08848da676b8793814d561617" as `0x${string}`;
 const UNI_POOL_FEE = 300; // 0.03%
 
 /** Aerodrome V1 volatile pool: TOKEN/WETH */
@@ -32,9 +33,6 @@ const AERO_ROUTER  = "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43" as `0x${string
 const AERO_FACTORY = "0x420DD381b31aEf6683db6B902084cB0FFECe40Da" as `0x${string}`;
 const AERO_POOL    = "0x7dcd4f5bcdae0546c84dab54401a93ad6e92ae1b" as `0x${string}`;
 
-
-/** Uniswap V3 QuoterV2 on Base — read-only price simulation */
-const UNI_QUOTER_V2 = "0x3d4e44Eb1374240CE5F1B136041461981153f70c" as `0x${string}`;
 
 /** Base sell probability (adjusted dynamically by price momentum) */
 const SELL_PROBABILITY_BASE = 0.40;
@@ -191,27 +189,21 @@ const AERO_ROUTER_ABI = [
   },
 ] as const;
 
-/** Uniswap V3 QuoterV2 — read-only, zero gas */
-const UNI_QUOTER_ABI = [
+/** Uniswap V3 pool slot0 — free on-chain price read (no QuoterV2 needed) */
+const UNI_POOL_SLOT0_ABI = [
   {
-    name: "quoteExactInputSingle",
+    name: "slot0",
     type: "function",
-    stateMutability: "nonpayable",
-    inputs: [{
-      name: "params", type: "tuple",
-      components: [
-        { name: "tokenIn",           type: "address" },
-        { name: "tokenOut",          type: "address" },
-        { name: "amountIn",          type: "uint256" },
-        { name: "fee",               type: "uint24"  },
-        { name: "sqrtPriceLimitX96", type: "uint160" },
-      ],
-    }],
+    stateMutability: "view",
+    inputs: [],
     outputs: [
-      { name: "amountOut",                 type: "uint256" },
-      { name: "sqrtPriceX96After",         type: "uint160" },
-      { name: "initializedTicksCrossed",   type: "uint32"  },
-      { name: "gasEstimate",               type: "uint256" },
+      { name: "sqrtPriceX96",             type: "uint160" },
+      { name: "tick",                     type: "int24"   },
+      { name: "observationIndex",         type: "uint16"  },
+      { name: "observationCardinality",   type: "uint16"  },
+      { name: "observationCardinalityNext", type: "uint16" },
+      { name: "feeProtocol",              type: "uint8"   },
+      { name: "unlocked",                 type: "bool"    },
     ],
   },
 ] as const;
@@ -709,26 +701,38 @@ interface QuoteResult {
   amountOut: bigint;
 }
 
-/** Quote Uniswap V3: ETH → TOKEN (buy) */
+/**
+ * Quote Uniswap V3: ETH → TOKEN (buy).
+ * Uses pool slot0 sqrtPriceX96 directly — no QuoterV2 needed.
+ * token0=GBLIN, token1=WETH → price = sqrtPriceX96² / 2¹⁹² = WETH per GBLIN
+ * amountOut_GBLIN = amountIn_WETH × 2¹⁹² / sqrtPriceX96² × (1e6 − fee) / 1e6
+ */
 async function quoteUniBuy(ethWei: bigint): Promise<bigint> {
-  const result = await publicClient.simulateContract({
-    address: UNI_QUOTER_V2,
-    abi:     UNI_QUOTER_ABI,
-    functionName: "quoteExactInputSingle",
-    args: [{ tokenIn: WETH_ADDRESS, tokenOut: TOKEN_ADDRESS, amountIn: ethWei, fee: UNI_POOL_FEE, sqrtPriceLimitX96: 0n }],
+  const slot0 = await publicClient.readContract({
+    address: UNI_POOL,
+    abi:     UNI_POOL_SLOT0_ABI,
+    functionName: "slot0",
   });
-  return result.result[0];
+  const sqrtPriceX96 = slot0[0];
+  const Q192 = 2n ** 192n;
+  return (ethWei * Q192 / (sqrtPriceX96 * sqrtPriceX96)) *
+    (1_000_000n - BigInt(UNI_POOL_FEE)) / 1_000_000n;
 }
 
-/** Quote Uniswap V3: TOKEN → ETH (sell) */
+/**
+ * Quote Uniswap V3: TOKEN → ETH (sell).
+ * amountOut_WETH = amountIn_GBLIN × sqrtPriceX96² / 2¹⁹² × (1e6 − fee) / 1e6
+ */
 async function quoteUniSell(gblinWei: bigint): Promise<bigint> {
-  const result = await publicClient.simulateContract({
-    address: UNI_QUOTER_V2,
-    abi:     UNI_QUOTER_ABI,
-    functionName: "quoteExactInputSingle",
-    args: [{ tokenIn: TOKEN_ADDRESS, tokenOut: WETH_ADDRESS, amountIn: gblinWei, fee: UNI_POOL_FEE, sqrtPriceLimitX96: 0n }],
+  const slot0 = await publicClient.readContract({
+    address: UNI_POOL,
+    abi:     UNI_POOL_SLOT0_ABI,
+    functionName: "slot0",
   });
-  return result.result[0];
+  const sqrtPriceX96 = slot0[0];
+  const Q192 = 2n ** 192n;
+  return (gblinWei * (sqrtPriceX96 * sqrtPriceX96) / Q192) *
+    (1_000_000n - BigInt(UNI_POOL_FEE)) / 1_000_000n;
 }
 
 const AERO_ROUTE_BUY  = [{ from: WETH_ADDRESS,  to: TOKEN_ADDRESS, stable: false, factory: AERO_FACTORY }] as const;
@@ -783,24 +787,25 @@ async function quoteGblinContractSell(gblinWei: bigint): Promise<bigint> {
 }
 
 /**
- * Queries Aerodrome V1 and GBLIN contract in parallel and returns the one
- * offering the most output tokens (for buy). Never costs gas.
- * Note: Uniswap V3 has no GBLIN/WETH pool on Base — excluded from routing.
+ * Queries Uniswap V3, Aerodrome V1 and GBLIN contract in parallel and returns
+ * the venue offering the most output tokens (for buy). Never costs gas.
  */
 async function findBestBuyVenue(ethWei: bigint, excludeGblin = false): Promise<QuoteResult> {
   if (excludeGblin) {
     logger.info(
       { gblinCountToday: gblinContractBuyCountToday, limit: GBLIN_CONTRACT_DAILY_BUY_LIMIT },
-      "GBLIN contract daily limit reached – Aerodrome only"
+      "GBLIN contract daily limit reached – quoting Uniswap V3 + Aerodrome only"
     );
   }
 
-  const [aero, gblin] = await Promise.allSettled([
-    quoteAerodromeBuy(ethWei).then((a): QuoteResult => ({ venue: "aerodrome", label: "Aerodrome V1",    amountOut: a })),
+  const [uni, aero, gblin] = await Promise.allSettled([
+    quoteUniBuy(ethWei).then((a): QuoteResult => ({ venue: "uniswap", label: "Uniswap V3",     amountOut: a })),
+    quoteAerodromeBuy(ethWei).then((a): QuoteResult => ({ venue: "aerodrome", label: "Aerodrome V1", amountOut: a })),
     ...(excludeGblin ? [] : [quoteGblinContractBuy(ethWei).then((a): QuoteResult => ({ venue: "gblin", label: "GBLIN contract", amountOut: a }))]),
   ]);
 
   const results: QuoteResult[] = [];
+  if (uni.status   === "fulfilled") results.push(uni.value);
   if (aero.status  === "fulfilled") results.push(aero.value);
   if (!excludeGblin && gblin?.status === "fulfilled") results.push((gblin as PromiseFulfilledResult<QuoteResult>).value);
 
@@ -824,13 +829,14 @@ async function findBestSellVenue(gblinWei: bigint, walletIndex?: number): Promis
     logger.info({ walletIndex, secsLeft }, "GBLIN sell lock active – excluding GBLIN from sell venues");
   }
 
-  // Note: Uniswap V3 has no GBLIN/WETH pool on Base — excluded from routing.
-  const [aero, gblin] = await Promise.allSettled([
-    quoteAerodromeSell(gblinWei).then((a): QuoteResult => ({ venue: "aerodrome", label: "Aerodrome V1",    amountOut: a })),
+  const [uni, aero, gblin] = await Promise.allSettled([
+    quoteUniSell(gblinWei).then((a): QuoteResult => ({ venue: "uniswap", label: "Uniswap V3",     amountOut: a })),
+    quoteAerodromeSell(gblinWei).then((a): QuoteResult => ({ venue: "aerodrome", label: "Aerodrome V1", amountOut: a })),
     ...(gblinLocked ? [] : [quoteGblinContractSell(gblinWei).then((a): QuoteResult => ({ venue: "gblin", label: "GBLIN contract", amountOut: a }))]),
   ]);
 
   const results: QuoteResult[] = [];
+  if (uni.status   === "fulfilled") results.push(uni.value);
   if (aero.status  === "fulfilled") results.push(aero.value);
   if (!gblinLocked && gblin?.status === "fulfilled") results.push((gblin as PromiseFulfilledResult<QuoteResult>).value);
 
