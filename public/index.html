@@ -90,6 +90,7 @@
           fetch(BASE + '/api/bot/metrics').then(r => r.json()),
         ]);
 
+        const gblinPrice = s.market?.gblinPriceUsd ?? 0;
         document.getElementById('subtitle').textContent =
           'Token: 0x38Dc…6345  •  ETH $' + (s.market?.ethPriceUsd?.toFixed(0) ?? '—') +
           (gblinPrice > 0 ? '  •  GBLIN $' + gblinPrice.toFixed(2) : '') +
@@ -103,7 +104,6 @@
         const totalUsd   = parseFloat(s.market?.totalBalanceUsd ?? '0');
         const totalEth   = s.wallets?.reduce((a, w) => a + (w.ethBalance || 0), 0) ?? 0;
         const totalGblinUsd = parseFloat(s.market?.totalGblinUsd ?? '0');
-        const gblinPrice = s.market?.gblinPriceUsd ?? 0;
         document.getElementById('stat-usd').textContent = '$' + totalUsd.toFixed(2);
         document.getElementById('stat-eth').textContent =
           totalEth.toFixed(5) + ' ETH' +
