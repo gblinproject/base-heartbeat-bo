@@ -1,21 +1,21 @@
 FROM node:20-alpine
 WORKDIR /app
 
-# Cache-bust: 20260514083428
-ARG CACHEBUST=20260514083428
-RUN echo build
+RUN apk add --no-cache curl
 
 COPY dist/ ./dist/
 COPY public/ ./public/
+COPY start.sh ./start.sh
 
-RUN echo '{'trades':[],'totalTrades':\0,'totalBuys':\0,'totalSells':\0}' > /trades.json
+RUN chmod +x /app/start.sh
+RUN echo '{"trades":[],"totalTrades":0,"totalBuys":0,"totalSells":0}' > /trades.json
 
 ENV NODE_ENV=production
 ENV PORT=8080
 
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=5 \
   CMD wget -qO- http://localhost:${PORT}/api/healthz || exit 1
 
-CMD ["node", "/app/dist/index.mjs"]
+CMD ["/app/start.sh"]
