@@ -108,12 +108,13 @@
         const label = s.status === 'running' ? 'ATTIVO' : s.status === 'waiting' ? 'ATTESA FONDI' : s.status.toUpperCase();
         statusEl.innerHTML = '<span class="badge ' + badge + '">' + label + '</span>';
 
-        const totalUsd   = parseFloat(s.market?.totalBalanceUsd ?? '0');
-        const totalEth   = s.wallets?.reduce((a, w) => a + (w.ethBalance || 0), 0) ?? 0;
+        const totalUsd      = parseFloat(s.market?.totalBalanceUsd ?? '0');
+        const totalEthUsd   = parseFloat(s.market?.totalEthUsd ?? '0');
         const totalGblinUsd = parseFloat(s.market?.totalGblinUsd ?? '0');
+        const totalEthAmt   = s.wallets?.reduce((a, w) => a + (w.ethBalance || 0), 0) ?? 0;
         document.getElementById('stat-usd').textContent = '$' + totalUsd.toFixed(2);
         document.getElementById('stat-eth').textContent =
-          totalEth.toFixed(5) + ' ETH' +
+          '$' + totalEthUsd.toFixed(2) + ' ETH (' + totalEthAmt.toFixed(5) + ')' +
           (totalGblinUsd > 0 ? '  +  $' + totalGblinUsd.toFixed(2) + ' GBLIN' : '');
 
         // Store nextTradeAt globally so the 1-second tick can count down
