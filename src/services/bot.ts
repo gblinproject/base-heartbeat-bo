@@ -377,6 +377,57 @@ let gblinContractBuyCountToday = 0;
 let gblinContractBuyDayKey     = ""; // "YYYY-MM-DD" UTC
 let gblinContractBuyUnlockMs   = 0;  // random UTC timestamp within today when GBLIN is unlocked
 
+// ─── Daily forced-buy slots (Uniswap + Aerodrome must each execute ≥1 buy/day) ─
+let forcedBuyDayKey             = "";
+let uniswapForcedBuyDoneToday   = false;
+let aerodromeForcedBuyDoneToday = false;
+let uniswapForcedBuyTimeMs      = 0;   // random UTC time when Uniswap forced-buy triggers
+let aerodromeForcedBuyTimeMs    = 0;   // random UTC time when Aerodrome forced-buy triggers
+
+/**
+ * Resets the per-venue forced-buy state at UTC midnight and picks a random
+ * trigger time within the new day for each venue.
+ */
+function refreshForcedBuySlots(): void {
+  const today = getUtcDateKey();
+  if (forcedBuyDayKey !== today) {
+    forcedBuyDayKey             = today;
+    uniswapForcedBuyDoneToday   = false;
+    aerodromeForcedBuyDoneToday = false;
+    const midnight = new Date(today + "T00:00:00Z").getTime();
+    const dayMs    = 24 * 60 * 60 * 1000;
+    uniswapForcedBuyTimeMs   = midnight + Math.floor(Math.random() * dayMs);
+    aerodromeForcedBuyTimeMs = midnight + Math.floor(Math.random() * dayMs);
+    logger.info(
+      {
+        date:              today,
+        uniswapForcedAt:   new Date(uniswapForcedBuyTimeMs).toISOString().slice(11, 16)   + " UTC",
+        aerodromeForcedAt: new Date(aerodromeForcedBuyTimeMs).toISOString().slice(11, 16) + " UTC",
+      },
+      "Daily forced-buy slots randomized (Uniswap V3 + Aerodrome V1)"
+    );
+  }
+}
+
+/**
+ * Returns which venue (if any) must be forced on the next buy because its
+ * daily minimum has not been satisfied yet and the trigger time has passed.
+ * Uniswap takes priority if both are due simultaneously.
+ */
+function getForcedBuyVenue(): "uniswap" | "aerodrome" | null {
+  refreshForcedBuySlots();
+  const now = Date.now();
+  if (!uniswapForcedBuyDoneToday   && now >= uniswapForcedBuyTimeMs)   return "uniswap";
+  if (!aerodromeForcedBuyDoneToday && now >= aerodromeForcedBuyTimeMs) return "aerodrome";
+  return null;
+}
+
+/** Mark a venue's forced-buy as satisfied for today (call after a confirmed buy). */
+function recordVenueBuyUsed(venue: string): void {
+  if (venue === "uniswap")   uniswapForcedBuyDoneToday   = true;
+  if (venue === "aerodrome") aerodromeForcedBuyDoneToday = true;
+}
+
 function getUtcDateKey(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -1463,16 +1514,43 @@ async function bestExecutionBuy(
     };
   }
 
+  // ── Daily minimum: each venue must execute ≥1 buy per day ──────────────────
+  const forcedVenue = getForcedBuyVenue();
+  if (forcedVenue) {
+    logger.info({ forcedVenue }, "Daily forced-buy: overriding best-execution to ensure venue diversity");
+    if (forcedVenue === "uniswap") {
+      const record = await executeBuy(wallet, ethPriceUsd, manual, ethWei, usdAmount);
+      if (record.success) recordVenueBuyUsed("uniswap");
+      return record;
+    } else {
+      const record = await executeBuyAerodrome(wallet, ethPriceUsd, manual, ethWei, usdAmount);
+      if (record.success) recordVenueBuyUsed("aerodrome");
+      return record;
+    }
+  }
+
+  // ── Normal best-execution routing ───────────────────────────────────────────
   const gblinAllowed = isGblinContractBuyAllowed();
   const best = await findBestBuyVenue(ethWei, !gblinAllowed).catch(() => null);
   if (!best) {
     // All quotes failed — fall back to Aerodrome with same amounts
     logger.warn("All buy quotes failed – falling back to Aerodrome");
-    return executeBuyAerodrome(wallet, ethPriceUsd, true, ethWei, usdAmount);
+    const record = await executeBuyAerodrome(wallet, ethPriceUsd, true, ethWei, usdAmount);
+    if (record.success) recordVenueBuyUsed("aerodrome");
+    return record;
   }
 
-  if (best.venue === "gblin")     return executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, manual);
-  return executeBuyAerodrome(wallet, ethPriceUsd, manual, ethWei, usdAmount);
+  if (best.venue === "uniswap") {
+    const record = await executeBuy(wallet, ethPriceUsd, manual, ethWei, usdAmount);
+    if (record.success) recordVenueBuyUsed("uniswap");
+    return record;
+  }
+  if (best.venue === "gblin") {
+    return executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, manual);
+  }
+  const record = await executeBuyAerodrome(wallet, ethPriceUsd, manual, ethWei, usdAmount);
+  if (record.success) recordVenueBuyUsed("aerodrome");
+  return record;
 }
 
 /**

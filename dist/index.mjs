@@ -51156,6 +51156,42 @@ var GBLIN_SELL_LOCK_MS = 15e4;
 var gblinContractBuyCountToday = 0;
 var gblinContractBuyDayKey = "";
 var gblinContractBuyUnlockMs = 0;
+var forcedBuyDayKey = "";
+var uniswapForcedBuyDoneToday = false;
+var aerodromeForcedBuyDoneToday = false;
+var uniswapForcedBuyTimeMs = 0;
+var aerodromeForcedBuyTimeMs = 0;
+function refreshForcedBuySlots() {
+  const today = getUtcDateKey();
+  if (forcedBuyDayKey !== today) {
+    forcedBuyDayKey = today;
+    uniswapForcedBuyDoneToday = false;
+    aerodromeForcedBuyDoneToday = false;
+    const midnight = (/* @__PURE__ */ new Date(today + "T00:00:00Z")).getTime();
+    const dayMs = 24 * 60 * 60 * 1e3;
+    uniswapForcedBuyTimeMs = midnight + Math.floor(Math.random() * dayMs);
+    aerodromeForcedBuyTimeMs = midnight + Math.floor(Math.random() * dayMs);
+    logger.info(
+      {
+        date: today,
+        uniswapForcedAt: new Date(uniswapForcedBuyTimeMs).toISOString().slice(11, 16) + " UTC",
+        aerodromeForcedAt: new Date(aerodromeForcedBuyTimeMs).toISOString().slice(11, 16) + " UTC"
+      },
+      "Daily forced-buy slots randomized (Uniswap V3 + Aerodrome V1)"
+    );
+  }
+}
+function getForcedBuyVenue() {
+  refreshForcedBuySlots();
+  const now = Date.now();
+  if (!uniswapForcedBuyDoneToday && now >= uniswapForcedBuyTimeMs) return "uniswap";
+  if (!aerodromeForcedBuyDoneToday && now >= aerodromeForcedBuyTimeMs) return "aerodrome";
+  return null;
+}
+function recordVenueBuyUsed(venue) {
+  if (venue === "uniswap") uniswapForcedBuyDoneToday = true;
+  if (venue === "aerodrome") aerodromeForcedBuyDoneToday = true;
+}
 function getUtcDateKey() {
   return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
 }
@@ -51960,14 +51996,38 @@ async function bestExecutionBuy(wallet, ethPriceUsd, manual = false) {
       error: `Low ETH balance: ${ethBalance.toFixed(6)} ETH`
     };
   }
+  const forcedVenue = getForcedBuyVenue();
+  if (forcedVenue) {
+    logger.info({ forcedVenue }, "Daily forced-buy: overriding best-execution to ensure venue diversity");
+    if (forcedVenue === "uniswap") {
+      const record2 = await executeBuy(wallet, ethPriceUsd, manual, ethWei, usdAmount);
+      if (record2.success) recordVenueBuyUsed("uniswap");
+      return record2;
+    } else {
+      const record2 = await executeBuyAerodrome(wallet, ethPriceUsd, manual, ethWei, usdAmount);
+      if (record2.success) recordVenueBuyUsed("aerodrome");
+      return record2;
+    }
+  }
   const gblinAllowed = isGblinContractBuyAllowed();
   const best = await findBestBuyVenue(ethWei, !gblinAllowed).catch(() => null);
   if (!best) {
     logger.warn("All buy quotes failed \u2013 falling back to Aerodrome");
-    return executeBuyAerodrome(wallet, ethPriceUsd, true, ethWei, usdAmount);
+    const record2 = await executeBuyAerodrome(wallet, ethPriceUsd, true, ethWei, usdAmount);
+    if (record2.success) recordVenueBuyUsed("aerodrome");
+    return record2;
   }
-  if (best.venue === "gblin") return executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, manual);
-  return executeBuyAerodrome(wallet, ethPriceUsd, manual, ethWei, usdAmount);
+  if (best.venue === "uniswap") {
+    const record2 = await executeBuy(wallet, ethPriceUsd, manual, ethWei, usdAmount);
+    if (record2.success) recordVenueBuyUsed("uniswap");
+    return record2;
+  }
+  if (best.venue === "gblin") {
+    return executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, manual);
+  }
+  const record = await executeBuyAerodrome(wallet, ethPriceUsd, manual, ethWei, usdAmount);
+  if (record.success) recordVenueBuyUsed("aerodrome");
+  return record;
 }
 async function bestExecutionSell(wallet, ethPriceUsd, manual = false) {
   await applyJitter(manual);
