@@ -632,16 +632,40 @@ async function getVariedGasPrice(): Promise<bigint> {
 // ─── ETH price ────────────────────────────────────────────────────────────────
 
 async function getEthPriceUsd(): Promise<number> {
+  // 1st try: Coinbase public spot price (no key, no rate limit)
+  try {
+    const res  = await fetch(
+      "https://api.coinbase.com/v2/prices/ETH-USD/spot",
+      { signal: AbortSignal.timeout(8_000) }
+    );
+    const data = (await res.json()) as { data?: { amount?: string } };
+    const price = parseFloat(data?.data?.amount ?? "0");
+    if (price > 100) return price;
+  } catch { /* fall through */ }
+
+  // 2nd try: Binance ticker (no key)
+  try {
+    const res  = await fetch(
+      "https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT",
+      { signal: AbortSignal.timeout(8_000) }
+    );
+    const data = (await res.json()) as { price?: string };
+    const price = parseFloat(data?.price ?? "0");
+    if (price > 100) return price;
+  } catch { /* fall through */ }
+
+  // 3rd try: CoinGecko
   try {
     const res  = await fetch(
       "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd",
       { signal: AbortSignal.timeout(10_000) }
     );
     const data = (await res.json()) as { ethereum?: { usd?: number } };
-    return data?.ethereum?.usd ?? 3000;
-  } catch {
-    return state.ethPriceUsd || 3000;
-  }
+    const price = data?.ethereum?.usd ?? 0;
+    if (price > 100) return price;
+  } catch { /* fall through */ }
+
+  return state.ethPriceUsd || 2500;
 }
 
 /** Fetches GBLIN price in USD from DexScreener (best-liquidity pair). Falls back to cached value. */
@@ -862,12 +886,15 @@ function encodeUnwrapWETH9(recipient: `0x${string}`): `0x${string}` {
 async function executeBuy(
   wallet: ReturnType<typeof getOrCreateWallets>[number],
   ethPriceUsd: number,
-  manual = false
+  manual = false,
+  ethWeiIn?: bigint,
+  usdAmountIn?: number,
 ): Promise<TradeRecord> {
-  await applyJitter(manual);
-  const usdAmount = selectBuyAmountUsd();
-  const ethAmount = usdAmount / ethPriceUsd;
-  const ethWei    = parseEther(ethAmount.toFixed(18));
+  const precomputed = ethWeiIn !== undefined && usdAmountIn !== undefined;
+  if (!precomputed) await applyJitter(manual);
+  const usdAmount = precomputed ? usdAmountIn! : selectBuyAmountUsd();
+  const ethWei    = precomputed ? ethWeiIn!    : parseEther((usdAmount / ethPriceUsd).toFixed(18));
+  const ethAmount = Number(ethWei) / 1e18;
   const deadline  = BigInt(Math.floor(Date.now() / 1000) + 300);
 
   const record: TradeRecord = {
@@ -915,13 +942,19 @@ async function executeBuy(
       value:    ethWei,
       gasPrice,
     });
+    const tokBefore = await getTokenBalance(wallet.address);
     await publicClient.waitForTransactionReceipt({ hash });
-    record.txHash  = hash;
+    const tokAfter  = await getTokenBalance(wallet.address);
+    record.txHash      = hash;
+    record.tokenAmount = formatUnits(
+      tokAfter.raw > tokBefore.raw ? tokAfter.raw - tokBefore.raw : 0n,
+      TOKEN_DECIMALS
+    );
     record.success = true;
     // Increment rebalance counter for this wallet
     consecutiveBuys.set(wallet.index, (consecutiveBuys.get(wallet.index) ?? 0) + 1);
     logger.info(
-      { hash, usd: usdAmount.toFixed(4), consecutiveBuys: consecutiveBuys.get(wallet.index) },
+      { hash, usd: usdAmount.toFixed(4), gblinReceived: record.tokenAmount, consecutiveBuys: consecutiveBuys.get(wallet.index) },
       "BUY confirmed ✅"
     );
   } catch (err) {
@@ -938,12 +971,15 @@ async function executeBuy(
 async function executeBuyAerodrome(
   wallet: ReturnType<typeof getOrCreateWallets>[number],
   ethPriceUsd: number,
-  manual = false
+  manual = false,
+  ethWeiIn?: bigint,
+  usdAmountIn?: number,
 ): Promise<TradeRecord> {
-  await applyJitter(manual);
-  const usdAmount = selectBuyAmountUsd();
-  const ethAmount = usdAmount / ethPriceUsd;
-  const ethWei    = parseEther(ethAmount.toFixed(18));
+  const precomputed = ethWeiIn !== undefined && usdAmountIn !== undefined;
+  if (!precomputed) await applyJitter(manual);
+  const usdAmount = precomputed ? usdAmountIn! : selectBuyAmountUsd();
+  const ethWei    = precomputed ? ethWeiIn!    : parseEther((usdAmount / ethPriceUsd).toFixed(18));
+  const ethAmount = Number(ethWei) / 1e18;
   const deadline  = BigInt(Math.floor(Date.now() / 1000) + 300);
 
   const record: TradeRecord = {
@@ -983,11 +1019,17 @@ async function executeBuyAerodrome(
       value:    ethWei,
       gasPrice,
     });
+    const tokBefore = await getTokenBalance(wallet.address);
     await publicClient.waitForTransactionReceipt({ hash });
-    record.txHash  = hash;
+    const tokAfter  = await getTokenBalance(wallet.address);
+    record.txHash      = hash;
+    record.tokenAmount = formatUnits(
+      tokAfter.raw > tokBefore.raw ? tokAfter.raw - tokBefore.raw : 0n,
+      TOKEN_DECIMALS
+    );
     record.success = true;
     consecutiveBuys.set(wallet.index, (consecutiveBuys.get(wallet.index) ?? 0) + 1);
-    logger.info({ hash, usd: usdAmount.toFixed(4), dex: "Aerodrome" }, "BUY Aerodrome confirmed ✅");
+    logger.info({ hash, usd: usdAmount.toFixed(4), gblinReceived: record.tokenAmount, dex: "Aerodrome" }, "BUY Aerodrome confirmed ✅");
   } catch (err) {
     record.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
     logger.error({ err }, "BUY Aerodrome failed");
@@ -1002,9 +1044,11 @@ async function executeBuyAerodrome(
 async function executeSellAerodrome(
   wallet: ReturnType<typeof getOrCreateWallets>[number],
   ethPriceUsd: number,
-  manual = false
+  manual = false,
+  sellAmountIn?: bigint,
 ): Promise<TradeRecord> {
-  await applyJitter(manual);
+  const precomputed = sellAmountIn !== undefined;
+  if (!precomputed) await applyJitter(manual);
   const { raw: tokenBalanceRaw, human: tokenBalanceHuman } = await getTokenBalance(wallet.address);
 
   const record: TradeRecord = {
@@ -1036,12 +1080,18 @@ async function executeSellAerodrome(
     return record;
   }
 
-  const sellPct    = randomBetween(SELL_PCT_MIN, SELL_PCT_MAX);
-  const sellAmount = (tokenBalanceRaw * BigInt(Math.floor(sellPct * 10000))) / 10000n;
+  const sellPct    = precomputed ? null : randomBetween(SELL_PCT_MIN, SELL_PCT_MAX);
+  const sellAmount = precomputed
+    ? sellAmountIn!
+    : (tokenBalanceRaw * BigInt(Math.floor(sellPct! * 10000))) / 10000n;
   if (sellAmount === 0n) { record.error = "Sell amount too small"; return record; }
 
   record.tokenAmount = formatUnits(sellAmount, TOKEN_DECIMALS);
-  logger.info({ wallet: wallet.address, tokenBal: tokenBalanceHuman, sellPct: (sellPct*100).toFixed(1)+"%", dex: "Aerodrome" }, "Executing SELL (Aerodrome)...");
+  logger.info({
+    wallet: wallet.address, tokenBal: tokenBalanceHuman,
+    sellPct: sellPct !== null ? (sellPct * 100).toFixed(1) + "%" : "pre-computed",
+    dex: "Aerodrome",
+  }, "Executing SELL (Aerodrome)...");
 
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 300);
 
@@ -1101,9 +1151,11 @@ async function executeSellAerodrome(
 async function executeSell(
   wallet: ReturnType<typeof getOrCreateWallets>[number],
   ethPriceUsd: number,
-  manual = false
+  manual = false,
+  sellAmountIn?: bigint,
 ): Promise<TradeRecord> {
-  await applyJitter(manual);
+  const precomputed = sellAmountIn !== undefined;
+  if (!precomputed) await applyJitter(manual);
   const { raw: tokenBalanceRaw, human: tokenBalanceHuman } = await getTokenBalance(wallet.address);
 
   const record: TradeRecord = {
@@ -1148,8 +1200,10 @@ async function executeSell(
     return record;
   }
 
-  const sellPct    = randomBetween(SELL_PCT_MIN, SELL_PCT_MAX);
-  const sellAmount = (tokenBalanceRaw * BigInt(Math.floor(sellPct * 10000))) / 10000n;
+  const sellPct    = precomputed ? null : randomBetween(SELL_PCT_MIN, SELL_PCT_MAX);
+  const sellAmount = precomputed
+    ? sellAmountIn!
+    : (tokenBalanceRaw * BigInt(Math.floor(sellPct! * 10000))) / 10000n;
 
   if (sellAmount === 0n) {
     record.error = "Sell amount too small";
@@ -1160,9 +1214,9 @@ async function executeSell(
 
   logger.info(
     {
-      wallet:    wallet.address,
-      tokenBal:  tokenBalanceHuman,
-      sellPct:   (sellPct * 100).toFixed(1) + "%",
+      wallet:     wallet.address,
+      tokenBal:   tokenBalanceHuman,
+      sellPct:    sellPct !== null ? (sellPct * 100).toFixed(1) + "%" : "pre-computed",
       sellAmount: record.tokenAmount,
     },
     "Executing SELL (approve → multicall swap+unwrap)..."
@@ -1283,13 +1337,19 @@ async function executeBuyGblinContract(
       gas:          600_000n, // buyGBLIN does internal swaps — needs more gas
       gasPrice,
     });
+    const tokBefore = await getTokenBalance(wallet.address);
     await publicClient.waitForTransactionReceipt({ hash });
-    record.txHash  = hash;
+    const tokAfter  = await getTokenBalance(wallet.address);
+    record.txHash      = hash;
+    record.tokenAmount = formatUnits(
+      tokAfter.raw > tokBefore.raw ? tokAfter.raw - tokBefore.raw : 0n,
+      TOKEN_DECIMALS
+    );
     record.success = true;
     consecutiveBuys.set(wallet.index, (consecutiveBuys.get(wallet.index) ?? 0) + 1);
     lastGblinBuyTimestamp.set(wallet.index, Date.now()); // start 2-min sell lock
     recordGblinContractBuyUsed();                        // track daily quota
-    logger.info({ hash, usd: usdAmount.toFixed(4), dex: "GBLIN contract", gblinBuysToday: gblinContractBuyCountToday }, "BUY GBLIN contract confirmed ✅");
+    logger.info({ hash, usd: usdAmount.toFixed(4), gblinReceived: record.tokenAmount, dex: "GBLIN contract", gblinBuysToday: gblinContractBuyCountToday }, "BUY GBLIN contract confirmed ✅");
   } catch (err) {
     record.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
     logger.error({ err }, "BUY GBLIN contract failed");
@@ -1402,14 +1462,14 @@ async function bestExecutionBuy(
   const gblinAllowed = isGblinContractBuyAllowed();
   const best = await findBestBuyVenue(ethWei, !gblinAllowed).catch(() => null);
   if (!best) {
-    // All quotes failed — fall back to Uniswap without quoting
+    // All quotes failed — fall back to Uniswap with same amounts
     logger.warn("All buy quotes failed – falling back to Uniswap V3");
-    return executeBuy(wallet, ethPriceUsd, true);
+    return executeBuy(wallet, ethPriceUsd, true, ethWei, usdAmount);
   }
 
   if (best.venue === "gblin")     return executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, manual);
-  if (best.venue === "aerodrome") return executeBuyAerodrome(wallet, ethPriceUsd, manual);
-  return executeBuy(wallet, ethPriceUsd, manual);
+  if (best.venue === "aerodrome") return executeBuyAerodrome(wallet, ethPriceUsd, manual, ethWei, usdAmount);
+  return executeBuy(wallet, ethPriceUsd, manual, ethWei, usdAmount);
 }
 
 /**
@@ -1467,12 +1527,12 @@ async function bestExecutionSell(
   const best = await findBestSellVenue(sellAmount, wallet.index).catch(() => null);
   if (!best) {
     logger.warn("All sell quotes failed – falling back to Uniswap V3");
-    return executeSell(wallet, ethPriceUsd, true);
+    return executeSell(wallet, ethPriceUsd, true, sellAmount);
   }
 
   if (best.venue === "gblin")     return executeSellGblinContract(wallet, ethPriceUsd, sellAmount, manual);
-  if (best.venue === "aerodrome") return executeSellAerodrome(wallet, ethPriceUsd, manual);
-  return executeSell(wallet, ethPriceUsd, manual);
+  if (best.venue === "aerodrome") return executeSellAerodrome(wallet, ethPriceUsd, manual, sellAmount);
+  return executeSell(wallet, ethPriceUsd, manual, sellAmount);
 }
 
 // ─── Retry wrapper ────────────────────────────────────────────────────────────
