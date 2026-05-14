@@ -783,25 +783,24 @@ async function quoteGblinContractSell(gblinWei: bigint): Promise<bigint> {
 }
 
 /**
- * Queries all 3 venues in parallel and returns the one offering the most
- * output tokens (for buy) or most ETH (for sell). Never costs gas.
+ * Queries Aerodrome V1 and GBLIN contract in parallel and returns the one
+ * offering the most output tokens (for buy). Never costs gas.
+ * Note: Uniswap V3 has no GBLIN/WETH pool on Base — excluded from routing.
  */
 async function findBestBuyVenue(ethWei: bigint, excludeGblin = false): Promise<QuoteResult> {
   if (excludeGblin) {
     logger.info(
       { gblinCountToday: gblinContractBuyCountToday, limit: GBLIN_CONTRACT_DAILY_BUY_LIMIT },
-      "GBLIN contract daily limit reached – excluding from buy quotes (DEX pools only)"
+      "GBLIN contract daily limit reached – Aerodrome only"
     );
   }
 
-  const [uni, aero, gblin] = await Promise.allSettled([
-    quoteUniBuy(ethWei).then((a): QuoteResult => ({ venue: "uniswap",   label: "Uniswap V3",      amountOut: a })),
+  const [aero, gblin] = await Promise.allSettled([
     quoteAerodromeBuy(ethWei).then((a): QuoteResult => ({ venue: "aerodrome", label: "Aerodrome V1",    amountOut: a })),
     ...(excludeGblin ? [] : [quoteGblinContractBuy(ethWei).then((a): QuoteResult => ({ venue: "gblin", label: "GBLIN contract", amountOut: a }))]),
   ]);
 
   const results: QuoteResult[] = [];
-  if (uni.status   === "fulfilled") results.push(uni.value);
   if (aero.status  === "fulfilled") results.push(aero.value);
   if (!excludeGblin && gblin?.status === "fulfilled") results.push((gblin as PromiseFulfilledResult<QuoteResult>).value);
 
@@ -825,14 +824,13 @@ async function findBestSellVenue(gblinWei: bigint, walletIndex?: number): Promis
     logger.info({ walletIndex, secsLeft }, "GBLIN sell lock active – excluding GBLIN from sell venues");
   }
 
-  const [uni, aero, gblin] = await Promise.allSettled([
-    quoteUniSell(gblinWei).then((a): QuoteResult => ({ venue: "uniswap",   label: "Uniswap V3",      amountOut: a })),
+  // Note: Uniswap V3 has no GBLIN/WETH pool on Base — excluded from routing.
+  const [aero, gblin] = await Promise.allSettled([
     quoteAerodromeSell(gblinWei).then((a): QuoteResult => ({ venue: "aerodrome", label: "Aerodrome V1",    amountOut: a })),
     ...(gblinLocked ? [] : [quoteGblinContractSell(gblinWei).then((a): QuoteResult => ({ venue: "gblin", label: "GBLIN contract", amountOut: a }))]),
   ]);
 
   const results: QuoteResult[] = [];
-  if (uni.status   === "fulfilled") results.push(uni.value);
   if (aero.status  === "fulfilled") results.push(aero.value);
   if (!gblinLocked && gblin?.status === "fulfilled") results.push((gblin as PromiseFulfilledResult<QuoteResult>).value);
 
@@ -1462,14 +1460,13 @@ async function bestExecutionBuy(
   const gblinAllowed = isGblinContractBuyAllowed();
   const best = await findBestBuyVenue(ethWei, !gblinAllowed).catch(() => null);
   if (!best) {
-    // All quotes failed — fall back to Uniswap with same amounts
-    logger.warn("All buy quotes failed – falling back to Uniswap V3");
-    return executeBuy(wallet, ethPriceUsd, true, ethWei, usdAmount);
+    // All quotes failed — fall back to Aerodrome with same amounts
+    logger.warn("All buy quotes failed – falling back to Aerodrome");
+    return executeBuyAerodrome(wallet, ethPriceUsd, true, ethWei, usdAmount);
   }
 
   if (best.venue === "gblin")     return executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, manual);
-  if (best.venue === "aerodrome") return executeBuyAerodrome(wallet, ethPriceUsd, manual, ethWei, usdAmount);
-  return executeBuy(wallet, ethPriceUsd, manual, ethWei, usdAmount);
+  return executeBuyAerodrome(wallet, ethPriceUsd, manual, ethWei, usdAmount);
 }
 
 /**
@@ -1526,13 +1523,12 @@ async function bestExecutionSell(
 
   const best = await findBestSellVenue(sellAmount, wallet.index).catch(() => null);
   if (!best) {
-    logger.warn("All sell quotes failed – falling back to Uniswap V3");
-    return executeSell(wallet, ethPriceUsd, true, sellAmount);
+    logger.warn("All sell quotes failed – falling back to Aerodrome");
+    return executeSellAerodrome(wallet, ethPriceUsd, true, sellAmount);
   }
 
   if (best.venue === "gblin")     return executeSellGblinContract(wallet, ethPriceUsd, sellAmount, manual);
-  if (best.venue === "aerodrome") return executeSellAerodrome(wallet, ethPriceUsd, manual, sellAmount);
-  return executeSell(wallet, ethPriceUsd, manual, sellAmount);
+  return executeSellAerodrome(wallet, ethPriceUsd, manual, sellAmount);
 }
 
 // ─── Retry wrapper ────────────────────────────────────────────────────────────

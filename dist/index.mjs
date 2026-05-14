@@ -1,4 +1,4 @@
-// built 2026-05-14T14:34:24.867Z
+// built 2026-05-14T14:44:47.147Z
 
 // src/app.ts
 import express from "express";
@@ -247,7 +247,6 @@ var UNI_POOL_FEE = 300;
 var AERO_ROUTER = "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43";
 var AERO_FACTORY = "0x420DD381b31aEf6683db6B902084cB0FFECe40Da";
 var AERO_POOL = "0x7dcd4f5bcdae0546c84dab54401a93ad6e92ae1b";
-var UNI_QUOTER_V2 = "0x3d4e44Eb1374240CE5F1B136041461981153f70c";
 var SELL_PROBABILITY_BASE = 0.4;
 var SELL_PCT_MIN = 0.15;
 var SELL_PCT_MAX = 0.85;
@@ -351,30 +350,6 @@ var AERO_ROUTER_ABI = [
       { name: "deadline", type: "uint256" }
     ],
     outputs: [{ name: "amounts", type: "uint256[]" }]
-  }
-];
-var UNI_QUOTER_ABI = [
-  {
-    name: "quoteExactInputSingle",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [{
-      name: "params",
-      type: "tuple",
-      components: [
-        { name: "tokenIn", type: "address" },
-        { name: "tokenOut", type: "address" },
-        { name: "amountIn", type: "uint256" },
-        { name: "fee", type: "uint24" },
-        { name: "sqrtPriceLimitX96", type: "uint160" }
-      ]
-    }],
-    outputs: [
-      { name: "amountOut", type: "uint256" },
-      { name: "sqrtPriceX96After", type: "uint160" },
-      { name: "initializedTicksCrossed", type: "uint32" },
-      { name: "gasEstimate", type: "uint256" }
-    ]
   }
 ];
 var AERO_AMOUNTS_ABI = [
@@ -688,24 +663,6 @@ async function getTokenBalance(address) {
   });
   return { raw, human: formatUnits(raw, TOKEN_DECIMALS) };
 }
-async function quoteUniBuy(ethWei) {
-  const result = await publicClient.simulateContract({
-    address: UNI_QUOTER_V2,
-    abi: UNI_QUOTER_ABI,
-    functionName: "quoteExactInputSingle",
-    args: [{ tokenIn: WETH_ADDRESS, tokenOut: TOKEN_ADDRESS, amountIn: ethWei, fee: UNI_POOL_FEE, sqrtPriceLimitX96: 0n }]
-  });
-  return result.result[0];
-}
-async function quoteUniSell(gblinWei) {
-  const result = await publicClient.simulateContract({
-    address: UNI_QUOTER_V2,
-    abi: UNI_QUOTER_ABI,
-    functionName: "quoteExactInputSingle",
-    args: [{ tokenIn: TOKEN_ADDRESS, tokenOut: WETH_ADDRESS, amountIn: gblinWei, fee: UNI_POOL_FEE, sqrtPriceLimitX96: 0n }]
-  });
-  return result.result[0];
-}
 var AERO_ROUTE_BUY = [{ from: WETH_ADDRESS, to: TOKEN_ADDRESS, stable: false, factory: AERO_FACTORY }];
 var AERO_ROUTE_SELL = [{ from: TOKEN_ADDRESS, to: WETH_ADDRESS, stable: false, factory: AERO_FACTORY }];
 async function quoteAerodromeBuy(ethWei) {
@@ -748,16 +705,14 @@ async function findBestBuyVenue(ethWei, excludeGblin = false) {
   if (excludeGblin) {
     logger.info(
       { gblinCountToday: gblinContractBuyCountToday, limit: GBLIN_CONTRACT_DAILY_BUY_LIMIT },
-      "GBLIN contract daily limit reached \u2013 excluding from buy quotes (DEX pools only)"
+      "GBLIN contract daily limit reached \u2013 Aerodrome only"
     );
   }
-  const [uni, aero, gblin] = await Promise.allSettled([
-    quoteUniBuy(ethWei).then((a) => ({ venue: "uniswap", label: "Uniswap V3", amountOut: a })),
+  const [aero, gblin] = await Promise.allSettled([
     quoteAerodromeBuy(ethWei).then((a) => ({ venue: "aerodrome", label: "Aerodrome V1", amountOut: a })),
     ...excludeGblin ? [] : [quoteGblinContractBuy(ethWei).then((a) => ({ venue: "gblin", label: "GBLIN contract", amountOut: a }))]
   ]);
   const results = [];
-  if (uni.status === "fulfilled") results.push(uni.value);
   if (aero.status === "fulfilled") results.push(aero.value);
   if (!excludeGblin && gblin?.status === "fulfilled") results.push(gblin.value);
   if (results.length === 0) throw new Error("All buy venues failed to quote");
@@ -774,13 +729,11 @@ async function findBestSellVenue(gblinWei, walletIndex) {
     const secsLeft = Math.ceil((GBLIN_SELL_LOCK_MS - (Date.now() - (lastGblinBuyTimestamp.get(walletIndex) ?? 0))) / 1e3);
     logger.info({ walletIndex, secsLeft }, "GBLIN sell lock active \u2013 excluding GBLIN from sell venues");
   }
-  const [uni, aero, gblin] = await Promise.allSettled([
-    quoteUniSell(gblinWei).then((a) => ({ venue: "uniswap", label: "Uniswap V3", amountOut: a })),
+  const [aero, gblin] = await Promise.allSettled([
     quoteAerodromeSell(gblinWei).then((a) => ({ venue: "aerodrome", label: "Aerodrome V1", amountOut: a })),
     ...gblinLocked ? [] : [quoteGblinContractSell(gblinWei).then((a) => ({ venue: "gblin", label: "GBLIN contract", amountOut: a }))]
   ]);
   const results = [];
-  if (uni.status === "fulfilled") results.push(uni.value);
   if (aero.status === "fulfilled") results.push(aero.value);
   if (!gblinLocked && gblin?.status === "fulfilled") results.push(gblin.value);
   if (results.length === 0) throw new Error("All sell venues failed to quote");
@@ -1289,12 +1242,11 @@ async function bestExecutionBuy(wallet, ethPriceUsd, manual = false) {
   const gblinAllowed = isGblinContractBuyAllowed();
   const best = await findBestBuyVenue(ethWei, !gblinAllowed).catch(() => null);
   if (!best) {
-    logger.warn("All buy quotes failed \u2013 falling back to Uniswap V3");
-    return executeBuy(wallet, ethPriceUsd, true, ethWei, usdAmount);
+    logger.warn("All buy quotes failed \u2013 falling back to Aerodrome");
+    return executeBuyAerodrome(wallet, ethPriceUsd, true, ethWei, usdAmount);
   }
   if (best.venue === "gblin") return executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, manual);
-  if (best.venue === "aerodrome") return executeBuyAerodrome(wallet, ethPriceUsd, manual, ethWei, usdAmount);
-  return executeBuy(wallet, ethPriceUsd, manual, ethWei, usdAmount);
+  return executeBuyAerodrome(wallet, ethPriceUsd, manual, ethWei, usdAmount);
 }
 async function bestExecutionSell(wallet, ethPriceUsd, manual = false) {
   await applyJitter(manual);
@@ -1366,12 +1318,11 @@ async function bestExecutionSell(wallet, ethPriceUsd, manual = false) {
   logger.info({ wallet: wallet.address, tokenBal: tokenBalanceHuman, sellPct: (sellPct * 100).toFixed(1) + "%" }, "Quoting best sell venue...");
   const best = await findBestSellVenue(sellAmount, wallet.index).catch(() => null);
   if (!best) {
-    logger.warn("All sell quotes failed \u2013 falling back to Uniswap V3");
-    return executeSell(wallet, ethPriceUsd, true, sellAmount);
+    logger.warn("All sell quotes failed \u2013 falling back to Aerodrome");
+    return executeSellAerodrome(wallet, ethPriceUsd, true, sellAmount);
   }
   if (best.venue === "gblin") return executeSellGblinContract(wallet, ethPriceUsd, sellAmount, manual);
-  if (best.venue === "aerodrome") return executeSellAerodrome(wallet, ethPriceUsd, manual, sellAmount);
-  return executeSell(wallet, ethPriceUsd, manual, sellAmount);
+  return executeSellAerodrome(wallet, ethPriceUsd, manual, sellAmount);
 }
 var SKIP_ERRORS = [
   "No token balance",
