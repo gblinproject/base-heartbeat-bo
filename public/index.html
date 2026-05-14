@@ -21,8 +21,9 @@
     .wallets { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 24px; }
     .wallet { background: #111827; border: 1px solid #1f2937; border-radius: 8px; padding: 14px; }
     .wallet-addr { font-size: 0.65rem; color: #6b7280; margin-bottom: 6px; }
-    .wallet-eth { font-size: 1rem; font-weight: 700; color: #60a5fa; }
-    .wallet-usd { font-size: 0.72rem; color: #6b7280; }
+    .wallet-eth { font-size: 0.9rem; font-weight: 700; color: #60a5fa; margin-bottom: 3px; }
+    .wallet-gblin { font-size: 0.8rem; color: #a78bfa; margin-bottom: 4px; }
+    .wallet-usd { font-size: 0.7rem; color: #6b7280; border-top: 1px solid #1f2937; padding-top: 4px; margin-top: 2px; }
     .trades { background: #111827; border: 1px solid #1f2937; border-radius: 10px; padding: 18px; }
     .trades-title { font-size: 0.65rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 14px; }
     .trade-row { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid #1f2937; font-size: 0.75rem; }
@@ -66,9 +67,21 @@
              d.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit' });
     }
     function fmtMins(sec) {
+      if (!sec || sec <= 0) return '—';
       if (sec < 60) return sec + 's';
-      return Math.round(sec / 60) + ' min';
+      const m = Math.floor(sec / 60), s = sec % 60;
+      return m + ' min' + (s > 0 ? ' ' + s + 's' : '');
     }
+
+    function updateCountdown() {
+      const el = document.getElementById('stat-next');
+      if (!window._nextTradeAt) { el.textContent = '—'; return; }
+      const remSec = Math.max(0, Math.round((window._nextTradeAt - Date.now()) / 1000));
+      el.textContent = fmtMins(remSec);
+    }
+
+    // Tick every second so the countdown is live
+    setInterval(updateCountdown, 1000);
 
     async function load() {
       try {
@@ -78,21 +91,28 @@
         ]);
 
         document.getElementById('subtitle').textContent =
-          'Token: 0x38Dc…6345  •  ETH $' + (s.market?.ethPriceUsd?.toFixed(0) ?? '—') + '  •  4 wallet su Base Mainnet';
+          'Token: 0x38Dc…6345  •  ETH $' + (s.market?.ethPriceUsd?.toFixed(0) ?? '—') +
+          (gblinPrice > 0 ? '  •  GBLIN $' + gblinPrice.toFixed(2) : '') +
+          '  •  4 wallet su Base Mainnet';
 
         const statusEl = document.getElementById('stat-status');
         const badge = s.status === 'running' ? 'running' : s.status === 'waiting' ? 'waiting' : 'stopped';
         const label = s.status === 'running' ? 'ATTIVO' : s.status === 'waiting' ? 'ATTESA FONDI' : s.status.toUpperCase();
         statusEl.innerHTML = '<span class="badge ' + badge + '">' + label + '</span>';
 
-        const totalUsd = s.wallets?.reduce((a, w) => a + (w.usdBalance || 0), 0) ?? 0;
-        const totalEth = s.wallets?.reduce((a, w) => a + (w.ethBalance || 0), 0) ?? 0;
+        const totalUsd   = parseFloat(s.market?.totalBalanceUsd ?? '0');
+        const totalEth   = s.wallets?.reduce((a, w) => a + (w.ethBalance || 0), 0) ?? 0;
+        const totalGblinUsd = parseFloat(s.market?.totalGblinUsd ?? '0');
+        const gblinPrice = s.market?.gblinPriceUsd ?? 0;
         document.getElementById('stat-usd').textContent = '$' + totalUsd.toFixed(2);
-        document.getElementById('stat-eth').textContent = totalEth.toFixed(6) + ' ETH';
+        document.getElementById('stat-eth').textContent =
+          totalEth.toFixed(5) + ' ETH' +
+          (totalGblinUsd > 0 ? '  +  $' + totalGblinUsd.toFixed(2) + ' GBLIN' : '');
 
-        const nextSec = s.heartbeat?.nextIntervalSec ?? 0;
-        document.getElementById('stat-next').textContent = fmtMins(nextSec);
+        // Store nextTradeAt globally so the 1-second tick can count down
+        window._nextTradeAt = s.heartbeat?.nextTradeAt ? new Date(s.heartbeat.nextTradeAt).getTime() : null;
         document.getElementById('stat-zone').textContent = 'zona: ' + (s.heartbeat?.zone ?? '—');
+        updateCountdown();
 
         const lt = s.lastTrade;
         if (lt) {
@@ -102,13 +122,21 @@
         }
 
         const walletsEl = document.getElementById('wallets');
-        walletsEl.innerHTML = (s.wallets ?? []).map(w =>
-          '<div class="wallet">' +
-          '<div class="wallet-addr">W' + w.index + ' · ' + w.address.slice(0, 6) + '…' + w.address.slice(-4) + '</div>' +
-          '<div class="wallet-eth">' + (w.ethBalance ?? 0).toFixed(5) + ' ETH</div>' +
-          '<div class="wallet-usd">$' + (w.usdBalance ?? 0).toFixed(2) + '</div>' +
-          '</div>'
-        ).join('');
+        walletsEl.innerHTML = (s.wallets ?? []).map(w => {
+          const gblin = parseFloat(w.tokenBalance ?? '0');
+          const gblinUsd = w.tokenBalanceUsd ?? 0;
+          const totalW = (w.usdBalance ?? 0) + gblinUsd;
+          const gblinRow = gblin > 0
+            ? '<div class="wallet-gblin">' + gblin.toFixed(6) + ' GBLIN' +
+              (gblinUsd > 0 ? ' · $' + gblinUsd.toFixed(2) : '') + '</div>'
+            : '<div class="wallet-gblin" style="color:#374151">0 GBLIN</div>';
+          return '<div class="wallet">' +
+            '<div class="wallet-addr">W' + w.index + ' · ' + w.address.slice(0, 6) + '…' + w.address.slice(-4) + '</div>' +
+            '<div class="wallet-eth">' + (w.ethBalance ?? 0).toFixed(5) + ' ETH · <span style="color:#9ca3af">$' + (w.usdBalance ?? 0).toFixed(2) + '</span></div>' +
+            gblinRow +
+            '<div class="wallet-usd">Totale $' + totalW.toFixed(2) + '</div>' +
+            '</div>';
+        }).join('');
 
         const trades = s.recentTrades ?? [];
         document.getElementById('trade-list').innerHTML = trades.length === 0
