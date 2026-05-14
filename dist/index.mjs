@@ -51141,6 +51141,7 @@ var state = {
   status: "initializing",
   wallets: [],
   ethPriceUsd: 0,
+  gblinPriceUsd: 0,
   lastCheck: null,
   lastTrade: null,
   nextTradeAt: null,
@@ -51318,6 +51319,21 @@ async function getEthPriceUsd() {
     return data?.ethereum?.usd ?? 3e3;
   } catch {
     return state.ethPriceUsd || 3e3;
+  }
+}
+async function getGblinPriceUsd() {
+  try {
+    const res = await fetch(
+      `https://api.dexscreener.com/latest/dex/tokens/${TOKEN_ADDRESS}`,
+      { signal: AbortSignal.timeout(8e3) }
+    );
+    const data = await res.json();
+    const pairs = (data?.pairs ?? []).filter((p) => p.priceUsd && Number(p.priceUsd) > 0).sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0));
+    const price = pairs[0]?.priceUsd ? parseFloat(pairs[0].priceUsd) : 0;
+    if (price > 0) state.gblinPriceUsd = price;
+    return price || state.gblinPriceUsd || 0;
+  } catch {
+    return state.gblinPriceUsd || 0;
   }
 }
 var TOKEN_DECIMALS = 18;
@@ -52069,6 +52085,8 @@ async function executeTrade(ethPriceUsd) {
 async function refreshBalances(ethPriceUsd) {
   const ws = getOrCreateWallets();
   const results = [];
+  getGblinPriceUsd().catch(() => {
+  });
   for (const w of ws) {
     try {
       const eth = await getEthBalance(w.address);
@@ -52080,17 +52098,20 @@ async function refreshBalances(ethPriceUsd) {
           "\u26A0\uFE0F  Wallet low on ETH \u2013 will be skipped for sells"
         );
       }
+      const gblinPrice = state.gblinPriceUsd || 0;
+      const tokenUsd = parseFloat((parseFloat(tok.human) * gblinPrice).toFixed(2));
       results.push({
         index: w.index,
         address: w.address,
         ethBalance: eth,
         usdBalance: parseFloat((eth * ethPriceUsd).toFixed(2)),
-        tokenBalance: tok.human
+        tokenBalance: tok.human,
+        tokenBalanceUsd: tokenUsd
       });
     } catch {
       const prev = state.wallets.find((x) => x.index === w.index);
       if (prev) results.push(prev);
-      else results.push({ index: w.index, address: w.address, ethBalance: 0, usdBalance: 0, tokenBalance: "0" });
+      else results.push({ index: w.index, address: w.address, ethBalance: 0, usdBalance: 0, tokenBalance: "0", tokenBalanceUsd: 0 });
     }
     await sleep(150);
   }
@@ -52377,7 +52398,10 @@ router2.get("/bot/status", (_req, res) => {
     wallets: state2.wallets,
     market: {
       ethPriceUsd: state2.ethPriceUsd,
-      totalBalanceUsd: state2.wallets.reduce((s, w) => s + w.usdBalance, 0).toFixed(2)
+      gblinPriceUsd: state2.gblinPriceUsd,
+      totalBalanceUsd: state2.wallets.reduce((s, w) => s + w.usdBalance + w.tokenBalanceUsd, 0).toFixed(2),
+      totalEthUsd: state2.wallets.reduce((s, w) => s + w.usdBalance, 0).toFixed(2),
+      totalGblinUsd: state2.wallets.reduce((s, w) => s + (w.tokenBalanceUsd || 0), 0).toFixed(2)
     },
     heartbeat: {
       targetToken: "0x38DcDB3A381677239BBc652aed9811F2f8496345",
