@@ -52102,7 +52102,12 @@ async function bestExecutionSell(wallet, ethPriceUsd, manual = false) {
     logger.warn("All sell quotes failed \u2013 falling back to Aerodrome");
     return executeSellAerodrome(wallet, ethPriceUsd, true, sellAmount);
   }
-  if (best.venue === "gblin") return executeSellGblinContract(wallet, ethPriceUsd, sellAmount, manual);
+  if (best.venue === "uniswap") {
+    return executeSell(wallet, ethPriceUsd, manual, sellAmount);
+  }
+  if (best.venue === "gblin") {
+    return executeSellGblinContract(wallet, ethPriceUsd, sellAmount, manual);
+  }
   return executeSellAerodrome(wallet, ethPriceUsd, manual, sellAmount);
 }
 var SKIP_ERRORS = [
@@ -52259,7 +52264,7 @@ async function scheduleNextTrade() {
       await distributeFunds(ethPrice);
       const record = await executeTrade(ethPrice);
       prevEthPriceUsd = ethPrice;
-      state.lastTrade = record;
+      if (record.success) state.lastTrade = record;
       state.totalTrades += 1;
       if (record.type === "buy") state.totalBuys += 1;
       if (record.type === "sell") state.totalSells += 1;
@@ -52358,7 +52363,7 @@ function getBotState() {
   return { ...state };
 }
 function _recordTrade(record, type) {
-  state.lastTrade = record;
+  if (record.success) state.lastTrade = record;
   state.totalTrades += 1;
   if (type === "buy") state.totalBuys += 1;
   else state.totalSells += 1;

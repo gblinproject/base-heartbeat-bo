@@ -1611,7 +1611,12 @@ async function bestExecutionSell(
     return executeSellAerodrome(wallet, ethPriceUsd, true, sellAmount);
   }
 
-  if (best.venue === "gblin")     return executeSellGblinContract(wallet, ethPriceUsd, sellAmount, manual);
+  if (best.venue === "uniswap") {
+    return executeSell(wallet, ethPriceUsd, manual, sellAmount);
+  }
+  if (best.venue === "gblin") {
+    return executeSellGblinContract(wallet, ethPriceUsd, sellAmount, manual);
+  }
   return executeSellAerodrome(wallet, ethPriceUsd, manual, sellAmount);
 }
 
@@ -1826,7 +1831,7 @@ async function scheduleNextTrade() {
 
       prevEthPriceUsd = ethPrice;
 
-      state.lastTrade   = record;
+      if (record.success) state.lastTrade = record;
       state.totalTrades += 1;
       if (record.type === "buy")  state.totalBuys  += 1;
       if (record.type === "sell") state.totalSells += 1;
@@ -1951,7 +1956,7 @@ export function getBotState(): BotState {
 }
 
 function _recordTrade(record: TradeRecord, type: "buy" | "sell") {
-  state.lastTrade    = record;
+  if (record.success) state.lastTrade = record;
   state.totalTrades += 1;
   if (type === "buy")  state.totalBuys  += 1;
   else                 state.totalSells += 1;
