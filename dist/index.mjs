@@ -51239,22 +51239,22 @@ function getIntervalMs() {
   const day = now.getUTCDay();
   const isWeekend = day === 0 || day === 6;
   const isNight = hour < 6;
-  const isPeak = hour >= 14 && hour < 16;
+  const isPeak = hour >= 12 && hour < 22;
   let minMs;
   let maxMs;
   if (isNight) {
-    minMs = 60 * 6e4;
-    maxMs = 180 * 6e4;
+    minMs = 45 * 6e4;
+    maxMs = 120 * 6e4;
   } else if (isPeak) {
-    minMs = 20 * 6e4;
-    maxMs = 45 * 6e4;
+    minMs = 8 * 6e4;
+    maxMs = 22 * 6e4;
   } else {
-    minMs = 35 * 6e4;
-    maxMs = 90 * 6e4;
+    minMs = 18 * 6e4;
+    maxMs = 45 * 6e4;
   }
   if (isWeekend) {
-    minMs = Math.round(minMs * 1.5);
-    maxMs = Math.round(maxMs * 1.5);
+    minMs = Math.round(minMs * 1.3);
+    maxMs = Math.round(maxMs * 1.3);
   }
   return randomBetween(minMs, maxMs);
 }
@@ -52117,17 +52117,17 @@ async function refreshBalances(ethPriceUsd) {
   }
   state.wallets = results;
 }
-var MAX_INTERVAL_MS = 120 * 6e4;
+var MAX_INTERVAL_MS = 75 * 6e4;
 async function scheduleNextTrade() {
   if (!isRunning) return;
   let intervalMs = getIntervalMs();
-  if (Math.random() < 0.15) {
-    const restMultiplier = randomBetween(1.5, 2);
+  if (Math.random() < 0.08) {
+    const restMultiplier = randomBetween(1.3, 1.7);
     intervalMs = Math.round(intervalMs * restMultiplier);
     logger.info({ restMultiplier: restMultiplier.toFixed(2) }, "Unplanned break \u2013 extending interval");
   }
   if (intervalMs > MAX_INTERVAL_MS) {
-    logger.info({ cappedFrom: Math.round(intervalMs / 6e4) + " min", cappedTo: "120 min" }, "Interval capped at maximum");
+    logger.info({ cappedFrom: Math.round(intervalMs / 6e4) + " min", cappedTo: "75 min" }, "Interval capped at maximum");
     intervalMs = MAX_INTERVAL_MS;
   }
   const intervalSec = Math.round(intervalMs / 1e3);
