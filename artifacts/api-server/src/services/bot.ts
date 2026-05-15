@@ -375,7 +375,6 @@ const GBLIN_SELL_LOCK_MS    = 150_000; // 2.5 min (30s margin over contract's 2-
 // ─── Daily GBLIN-contract buy counter ─────────────────────────────────────────
 let gblinContractBuyCountToday = 0;
 let gblinContractBuyDayKey     = ""; // "YYYY-MM-DD" UTC
-let gblinContractBuyUnlockMs   = 0;  // random UTC timestamp within today when GBLIN is unlocked
 
 // ─── Daily forced-buy slots (Uniswap + Aerodrome must each execute ≥1 buy/day) ─
 let forcedBuyDayKey             = "";
@@ -442,21 +441,14 @@ function refreshGblinDailySlot(): void {
   if (gblinContractBuyDayKey !== today) {
     gblinContractBuyCountToday = 0;
     gblinContractBuyDayKey     = today;
-    const midnightMs  = new Date(today + "T00:00:00Z").getTime();
-    const randomOffMs = Math.floor(Math.random() * 24 * 60 * 60 * 1000);
-    gblinContractBuyUnlockMs  = midnightMs + randomOffMs;
-    logger.info(
-      { date: today, gblinUnlockAt: new Date(gblinContractBuyUnlockMs).toISOString().slice(11, 16) + " UTC" },
-      "Daily GBLIN contract buy slot randomized"
-    );
+    logger.info({ date: today, limit: GBLIN_CONTRACT_DAILY_BUY_LIMIT }, "Daily GBLIN contract buy counter reset");
   }
 }
 
 /** Returns true if the bot is allowed to buy directly from the GBLIN contract right now. */
 function isGblinContractBuyAllowed(): boolean {
   refreshGblinDailySlot();
-  return gblinContractBuyCountToday < GBLIN_CONTRACT_DAILY_BUY_LIMIT &&
-         Date.now() >= gblinContractBuyUnlockMs;
+  return gblinContractBuyCountToday < GBLIN_CONTRACT_DAILY_BUY_LIMIT;
 }
 
 /** Call after a confirmed GBLIN-contract buy to consume today's quota. */
@@ -1522,11 +1514,13 @@ async function bestExecutionBuy(
     logger.info({ forcedVenue }, "Daily forced-buy: overriding best-execution to ensure venue diversity");
     if (forcedVenue === "uniswap") {
       const record = await executeBuy(wallet, ethPriceUsd, manual, ethWei, usdAmount);
-      if (record.success) recordVenueBuyUsed("uniswap");
+      // Mark as done regardless of success — prevents being stuck in forced-Uniswap
+      // mode if this cycle's trade fails (low ETH, skip, etc.).
+      recordVenueBuyUsed("uniswap");
       return record;
     } else {
       const record = await executeBuyAerodrome(wallet, ethPriceUsd, manual, ethWei, usdAmount);
-      if (record.success) recordVenueBuyUsed("aerodrome");
+      recordVenueBuyUsed("aerodrome");
       return record;
     }
   }

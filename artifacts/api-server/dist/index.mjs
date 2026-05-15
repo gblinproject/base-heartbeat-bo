@@ -51155,7 +51155,6 @@ var lastGblinBuyTimestamp = /* @__PURE__ */ new Map();
 var GBLIN_SELL_LOCK_MS = 15e4;
 var gblinContractBuyCountToday = 0;
 var gblinContractBuyDayKey = "";
-var gblinContractBuyUnlockMs = 0;
 var forcedBuyDayKey = "";
 var uniswapForcedBuyDoneToday = false;
 var aerodromeForcedBuyDoneToday = false;
@@ -51200,18 +51199,12 @@ function refreshGblinDailySlot() {
   if (gblinContractBuyDayKey !== today) {
     gblinContractBuyCountToday = 0;
     gblinContractBuyDayKey = today;
-    const midnightMs = (/* @__PURE__ */ new Date(today + "T00:00:00Z")).getTime();
-    const randomOffMs = Math.floor(Math.random() * 24 * 60 * 60 * 1e3);
-    gblinContractBuyUnlockMs = midnightMs + randomOffMs;
-    logger.info(
-      { date: today, gblinUnlockAt: new Date(gblinContractBuyUnlockMs).toISOString().slice(11, 16) + " UTC" },
-      "Daily GBLIN contract buy slot randomized"
-    );
+    logger.info({ date: today, limit: GBLIN_CONTRACT_DAILY_BUY_LIMIT }, "Daily GBLIN contract buy counter reset");
   }
 }
 function isGblinContractBuyAllowed() {
   refreshGblinDailySlot();
-  return gblinContractBuyCountToday < GBLIN_CONTRACT_DAILY_BUY_LIMIT && Date.now() >= gblinContractBuyUnlockMs;
+  return gblinContractBuyCountToday < GBLIN_CONTRACT_DAILY_BUY_LIMIT;
 }
 function recordGblinContractBuyUsed() {
   refreshGblinDailySlot();
@@ -52001,11 +51994,11 @@ async function bestExecutionBuy(wallet, ethPriceUsd, manual = false) {
     logger.info({ forcedVenue }, "Daily forced-buy: overriding best-execution to ensure venue diversity");
     if (forcedVenue === "uniswap") {
       const record2 = await executeBuy(wallet, ethPriceUsd, manual, ethWei, usdAmount);
-      if (record2.success) recordVenueBuyUsed("uniswap");
+      recordVenueBuyUsed("uniswap");
       return record2;
     } else {
       const record2 = await executeBuyAerodrome(wallet, ethPriceUsd, manual, ethWei, usdAmount);
-      if (record2.success) recordVenueBuyUsed("aerodrome");
+      recordVenueBuyUsed("aerodrome");
       return record2;
     }
   }
