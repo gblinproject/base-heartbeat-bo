@@ -50934,7 +50934,7 @@ var FUNDED_THRESHOLD_USD = 10;
 var POLLING_INTERVAL_MS = 60 * 1e3;
 var SELL_COOLDOWN_MS = 45 * 60 * 1e3;
 var GBLIN_MIN_ETH_WEI = parseEther("0.0005");
-var GBLIN_CONTRACT_DAILY_BUY_LIMIT = 1;
+var GBLIN_CONTRACT_DAILY_BUY_LIMIT = 5;
 var BUY_PRESETS = [
   { amount: 0.5, weight: 0.15 },
   { amount: 0.75, weight: 0.25 },
@@ -51437,12 +51437,12 @@ async function quoteAerodromeSell(gblinWei) {
   return amounts[amounts.length - 1];
 }
 async function quoteGblinContractBuy(ethWei) {
-  const safeEthWei = ethWei < GBLIN_MIN_ETH_WEI ? GBLIN_MIN_ETH_WEI : ethWei;
+  if (ethWei < GBLIN_MIN_ETH_WEI) return 0n;
   const [gblinOut] = await publicClient.readContract({
     address: TOKEN_ADDRESS,
     abi: GBLIN_CONTRACT_ABI,
     functionName: "quoteBuyGBLIN",
-    args: [safeEthWei]
+    args: [ethWei]
   });
   return gblinOut * 999n / 1000n;
 }

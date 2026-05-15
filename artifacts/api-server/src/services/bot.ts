@@ -54,7 +54,7 @@ const SELL_COOLDOWN_MS = 45 * 60 * 1000; // 45 min
 const GBLIN_MIN_ETH_WEI = parseEther("0.0005");
 
 /** Max direct GBLIN-contract buys per calendar day (UTC). Remaining buys go to DEX pools. */
-const GBLIN_CONTRACT_DAILY_BUY_LIMIT = 1;
+const GBLIN_CONTRACT_DAILY_BUY_LIMIT = 5;
 
 // ─── Buy amount presets $0.50 – $1.50 (weighted toward human-friendly values) ──
 
@@ -813,13 +813,15 @@ async function quoteAerodromeSell(gblinWei: bigint): Promise<bigint> {
 
 /** Quote GBLIN contract: ETH → TOKEN (buy) */
 async function quoteGblinContractBuy(ethWei: bigint): Promise<bigint> {
-  // Enforce contract minimum: 0.0005 ETH
-  const safeEthWei = ethWei < GBLIN_MIN_ETH_WEI ? GBLIN_MIN_ETH_WEI : ethWei;
+  // GBLIN contract requires minimum 0.0005 ETH — cannot execute below this amount.
+  // Return 0n so the venue is excluded from comparison (prevents inflated quotes
+  // from using a larger dummy amount that would make GBLIN appear artificially better).
+  if (ethWei < GBLIN_MIN_ETH_WEI) return 0n;
   const [gblinOut] = await publicClient.readContract({
     address: TOKEN_ADDRESS,
     abi:     GBLIN_CONTRACT_ABI,
     functionName: "quoteBuyGBLIN",
-    args:    [safeEthWei],
+    args:    [ethWei],
   });
   // Apply 0.1% fee discount for fair comparison: the contract retains 0.1% of
   // the buy amount regardless of whether quoteBuyGBLIN returns gross or net.
