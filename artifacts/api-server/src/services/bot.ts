@@ -76,6 +76,13 @@ const WALLET_WEIGHTS = [0.35, 0.30, 0.20, 0.15];
  */
 const MIN_ETH_FOR_SELL = 0.0005;
 
+/**
+ * Hard reserve kept in every wallet at all times so there is always enough
+ * ETH to pay gas for future sells.  Buys will never spend below this floor.
+ * 0.001 ETH ≈ $2.25 at $2250/ETH — covers ~2 sell TXs with comfortable margin.
+ */
+const ETH_RESERVE = 0.001;
+
 // ─── ABIs ─────────────────────────────────────────────────────────────────────
 
 /** WETH9 ABI — deposit (wrap ETH), withdraw, approve */
@@ -960,9 +967,9 @@ async function executeBuy(
   };
 
   const ethBalance = await getEthBalance(wallet.address);
-  if (ethBalance < ethAmount + 0.0001) {
-    record.error = `Low ETH balance: ${ethBalance.toFixed(6)} ETH`;
-    logger.warn({ wallet: wallet.address, balance: ethBalance }, "Skipping buy – low ETH");
+  if (ethBalance < ethAmount + ETH_RESERVE) {
+    record.error = `Low ETH balance: ${ethBalance.toFixed(6)} ETH (reserve: ${ETH_RESERVE})`;
+    logger.warn({ wallet: wallet.address, balance: ethBalance, reserve: ETH_RESERVE }, "Skipping buy – would breach ETH reserve");
     return record;
   }
 
@@ -1046,8 +1053,8 @@ async function executeBuyAerodrome(
   };
 
   const ethBalance = await getEthBalance(wallet.address);
-  if (ethBalance < ethAmount + 0.0001) {
-    record.error = `Low ETH balance: ${ethBalance.toFixed(6)} ETH`;
+  if (ethBalance < ethAmount + ETH_RESERVE) {
+    record.error = `Low ETH balance: ${ethBalance.toFixed(6)} ETH (reserve: ${ETH_RESERVE})`;
     return record;
   }
 
@@ -1498,13 +1505,13 @@ async function bestExecutionBuy(
   const ethWei    = parseEther(ethAmount.toFixed(18));
 
   const ethBalance = await getEthBalance(wallet.address);
-  if (ethBalance < ethAmount + 0.0002) {
+  if (ethBalance < ethAmount + ETH_RESERVE) {
     return {
       timestamp: new Date().toISOString(), type: "buy",
       walletIndex: wallet.index, walletAddress: wallet.address,
       ethAmount, usdAmount, tokenAmount: "0", ethPriceUsd,
       txHash: null, success: false,
-      error: `Low ETH balance: ${ethBalance.toFixed(6)} ETH`,
+      error: `Low ETH balance: ${ethBalance.toFixed(6)} ETH (reserve: ${ETH_RESERVE})`,
     };
   }
 

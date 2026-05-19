@@ -50944,6 +50944,7 @@ var BUY_PRESETS = [
 ];
 var WALLET_WEIGHTS2 = [0.35, 0.3, 0.2, 0.15];
 var MIN_ETH_FOR_SELL = 5e-4;
+var ETH_RESERVE = 1e-3;
 var SWAP_ROUTER_ABI = [
   {
     name: "exactInputSingle",
@@ -51536,9 +51537,9 @@ async function executeBuy(wallet, ethPriceUsd, manual = false, ethWeiIn, usdAmou
     dex: "Uniswap V3"
   };
   const ethBalance = await getEthBalance(wallet.address);
-  if (ethBalance < ethAmount + 1e-4) {
-    record.error = `Low ETH balance: ${ethBalance.toFixed(6)} ETH`;
-    logger.warn({ wallet: wallet.address, balance: ethBalance }, "Skipping buy \u2013 low ETH");
+  if (ethBalance < ethAmount + ETH_RESERVE) {
+    record.error = `Low ETH balance: ${ethBalance.toFixed(6)} ETH (reserve: ${ETH_RESERVE})`;
+    logger.warn({ wallet: wallet.address, balance: ethBalance, reserve: ETH_RESERVE }, "Skipping buy \u2013 would breach ETH reserve");
     return record;
   }
   logger.info(
@@ -51607,8 +51608,8 @@ async function executeBuyAerodrome(wallet, ethPriceUsd, manual = false, ethWeiIn
     dex: "Aerodrome"
   };
   const ethBalance = await getEthBalance(wallet.address);
-  if (ethBalance < ethAmount + 1e-4) {
-    record.error = `Low ETH balance: ${ethBalance.toFixed(6)} ETH`;
+  if (ethBalance < ethAmount + ETH_RESERVE) {
+    record.error = `Low ETH balance: ${ethBalance.toFixed(6)} ETH (reserve: ${ETH_RESERVE})`;
     return record;
   }
   logger.info({ wallet: wallet.address, usd: usdAmount.toFixed(4), dex: "Aerodrome" }, "Executing BUY (Aerodrome)...");
@@ -51974,7 +51975,7 @@ async function bestExecutionBuy(wallet, ethPriceUsd, manual = false) {
   const ethAmount = usdAmount / ethPriceUsd;
   const ethWei = parseEther(ethAmount.toFixed(18));
   const ethBalance = await getEthBalance(wallet.address);
-  if (ethBalance < ethAmount + 2e-4) {
+  if (ethBalance < ethAmount + ETH_RESERVE) {
     return {
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
       type: "buy",
@@ -51986,7 +51987,7 @@ async function bestExecutionBuy(wallet, ethPriceUsd, manual = false) {
       ethPriceUsd,
       txHash: null,
       success: false,
-      error: `Low ETH balance: ${ethBalance.toFixed(6)} ETH`
+      error: `Low ETH balance: ${ethBalance.toFixed(6)} ETH (reserve: ${ETH_RESERVE})`
     };
   }
   const forcedVenue = getForcedBuyVenue();
