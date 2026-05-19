@@ -52494,36 +52494,62 @@ function triggerSellGblinContract() {
     return executeSellGblinContract(wallet, p, sellAmount, true);
   }).then((r) => _recordTrade(r, "sell")).catch((err) => logger.error({ err }, "Manual SELL GBLIN contract failed"));
 }
+async function withRateLimitRetry(fn, maxAttempts = 4) {
+  let delay = 8e3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const isRateLimit = msg.toLowerCase().includes("rate limit") || msg.toLowerCase().includes("over rate");
+      if (!isRateLimit || attempt === maxAttempts) throw err;
+      logger.warn({ attempt, delayMs: delay }, "RPC rate limit \u2013 backing off before retry");
+      await sleep(delay);
+      delay = Math.min(delay * 2, 3e4);
+    }
+  }
+  throw new Error("withRateLimitRetry: unreachable");
+}
 async function triggerForceSellAll() {
   const ws = getOrCreateWallets();
-  const ethPriceUsd = await getEthPriceUsd();
+  const ethPriceUsd = state.ethPriceUsd > 0 ? state.ethPriceUsd : await withRateLimitRetry(() => getEthPriceUsd());
   state.ethPriceUsd = ethPriceUsd;
   const results = [];
   logger.info("Force-sell-all triggered \u2014 selling from every wallet with GBLIN");
   for (const w of ws) {
-    const { raw: tokenRaw, human: tokenHuman } = await getTokenBalance(w.address);
-    if (tokenRaw === 0n) {
-      results.push({ wallet: `W${w.index}(${w.address.slice(0, 8)}\u2026)`, result: "skipped \u2013 no GBLIN" });
-      continue;
+    const label = `W${w.index}(${w.address.slice(0, 8)}\u2026)`;
+    const cachedHuman = state.wallets.find((sw) => sw.index === w.index)?.tokenBalance ?? "0";
+    const cachedIsZero = parseFloat(cachedHuman) === 0;
+    if (cachedIsZero) {
+      let freshRaw;
+      try {
+        freshRaw = (await withRateLimitRetry(() => getTokenBalance(w.address))).raw;
+      } catch {
+        results.push({ wallet: label, result: "skipped \u2013 RPC unavailable" });
+        continue;
+      }
+      if (freshRaw === 0n) {
+        results.push({ wallet: label, result: "skipped \u2013 no GBLIN" });
+        continue;
+      }
     }
-    const pct = randomBetween(0.2, 0.35);
-    const sell = tokenRaw * BigInt(Math.floor(pct * 1e4)) / 10000n;
-    logger.info({ wallet: `W${w.index}`, tokens: tokenHuman, pct: (pct * 100).toFixed(0) + "%" }, "Force-sell: executing on wallet");
+    logger.info({ wallet: `W${w.index}`, cachedGblin: cachedHuman }, "Force-sell: executing on wallet");
     let record;
     try {
-      record = await bestExecutionSell(w, ethPriceUsd, true);
+      record = await withRateLimitRetry(() => bestExecutionSell(w, ethPriceUsd, true));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      results.push({ wallet: `W${w.index}(${w.address.slice(0, 8)}\u2026)`, result: `error: ${msg}` });
+      results.push({ wallet: label, result: `error: ${msg}` });
+      await sleep(5e3);
       continue;
     }
     if (record.success) {
       _recordTrade(record, "sell");
-      results.push({ wallet: `W${w.index}(${w.address.slice(0, 8)}\u2026)`, result: `sold \u2192 ${record.ethAmount?.toFixed(6)} ETH (tx: ${record.txHash})` });
+      results.push({ wallet: label, result: `sold \u2192 ${record.ethAmount?.toFixed(6)} ETH (tx: ${record.txHash})` });
     } else {
-      results.push({ wallet: `W${w.index}(${w.address.slice(0, 8)}\u2026)`, result: `failed: ${record.error}` });
+      results.push({ wallet: label, result: `failed: ${record.error}` });
     }
-    await sleep(2e3);
+    await sleep(6e3);
   }
   logger.info({ results }, "Force-sell-all complete");
   return results;
