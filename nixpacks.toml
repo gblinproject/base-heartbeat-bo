@@ -1,12 +1,1 @@
-[phases.setup]
-nixPkgs = ["nodejs_20"]
-
-[phases.install]
-cmds = []
-
-[phases.build]
-cmds = []
-
-[start]
-cmd = "node /app/dist/index.mjs"
-# bust: 20260514T081607
+[phases.setup]\nnixPkgs = ["nodejs_20"]\n\n[phases.install]\ncmds = []\n\n[phases.build]\ncmds = []\n\n[start]\ncmd = "/app/start.sh"\n# bust: 20260519T082332\n
