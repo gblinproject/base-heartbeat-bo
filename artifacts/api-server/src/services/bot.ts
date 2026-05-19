@@ -1685,15 +1685,28 @@ async function executeTrade(ethPriceUsd: number): Promise<TradeRecord> {
     (w) => (consecutiveBuys.get(w.index) ?? 0) >= getRebalanceThreshold(w.index)
   );
   if (rebalanceCandidate) {
-    logger.info(
-      {
-        wallet: rebalanceCandidate.address,
-        consecutiveBuys: consecutiveBuys.get(rebalanceCandidate.index),
-        threshold: getRebalanceThreshold(rebalanceCandidate.index),
-      },
-      "Rebalance: forcing SELL (best execution)"
-    );
-    return withRetry(() => bestExecutionSell(rebalanceCandidate, ethPriceUsd));
+    // Check if this wallet has enough ETH to pay gas for the sell.
+    // If not, reset its counter and fall through to BUY — otherwise the bot
+    // loops forever on failed sells from a gas-less wallet.
+    const rebEthBal = await getEthBalance(rebalanceCandidate.address);
+    if (rebEthBal < MIN_ETH_FOR_SELL) {
+      logger.warn(
+        { wallet: rebalanceCandidate.address, ethBal: rebEthBal.toFixed(6), need: MIN_ETH_FOR_SELL },
+        "Rebalance wallet has no ETH for gas – resetting consecutive-buy counter, falling back to BUY"
+      );
+      consecutiveBuys.set(rebalanceCandidate.index, 0);
+      // fall through to normal buy/sell logic below
+    } else {
+      logger.info(
+        {
+          wallet: rebalanceCandidate.address,
+          consecutiveBuys: consecutiveBuys.get(rebalanceCandidate.index),
+          threshold: getRebalanceThreshold(rebalanceCandidate.index),
+        },
+        "Rebalance: forcing SELL (best execution)"
+      );
+      return withRetry(() => bestExecutionSell(rebalanceCandidate, ethPriceUsd));
+    }
   }
   // ────────────────────────────────────────────────────────────────────────────
 
@@ -1701,10 +1714,13 @@ async function executeTrade(ethPriceUsd: number): Promise<TradeRecord> {
   const isSell   = Math.random() < sellProb;
 
   if (isSell) {
-    // For sells, pick only wallets that hold tokens and aren't in cooldown
+    // For sells, pick only wallets that aren't in cooldown AND have enough ETH for gas.
+    // Using cached state balances (refreshed each cycle) to avoid extra RPC calls.
     const eligible = wallets.filter((w) => {
       const lastSell = lastSellTimestamp.get(w.index) ?? 0;
-      return Date.now() - lastSell >= SELL_COOLDOWN_MS;
+      const cooldownOk = Date.now() - lastSell >= SELL_COOLDOWN_MS;
+      const cachedEth  = state.wallets.find((sw) => sw.index === w.index)?.ethBalance ?? 1;
+      return cooldownOk && cachedEth >= MIN_ETH_FOR_SELL;
     });
 
     if (eligible.length > 0) {

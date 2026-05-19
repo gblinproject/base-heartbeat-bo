@@ -52147,22 +52147,33 @@ async function executeTrade(ethPriceUsd) {
     (w) => (consecutiveBuys.get(w.index) ?? 0) >= getRebalanceThreshold(w.index)
   );
   if (rebalanceCandidate) {
-    logger.info(
-      {
-        wallet: rebalanceCandidate.address,
-        consecutiveBuys: consecutiveBuys.get(rebalanceCandidate.index),
-        threshold: getRebalanceThreshold(rebalanceCandidate.index)
-      },
-      "Rebalance: forcing SELL (best execution)"
-    );
-    return withRetry2(() => bestExecutionSell(rebalanceCandidate, ethPriceUsd));
+    const rebEthBal = await getEthBalance(rebalanceCandidate.address);
+    if (rebEthBal < MIN_ETH_FOR_SELL) {
+      logger.warn(
+        { wallet: rebalanceCandidate.address, ethBal: rebEthBal.toFixed(6), need: MIN_ETH_FOR_SELL },
+        "Rebalance wallet has no ETH for gas \u2013 resetting consecutive-buy counter, falling back to BUY"
+      );
+      consecutiveBuys.set(rebalanceCandidate.index, 0);
+    } else {
+      logger.info(
+        {
+          wallet: rebalanceCandidate.address,
+          consecutiveBuys: consecutiveBuys.get(rebalanceCandidate.index),
+          threshold: getRebalanceThreshold(rebalanceCandidate.index)
+        },
+        "Rebalance: forcing SELL (best execution)"
+      );
+      return withRetry2(() => bestExecutionSell(rebalanceCandidate, ethPriceUsd));
+    }
   }
   const sellProb = currentSellProbability(ethPriceUsd);
   const isSell = Math.random() < sellProb;
   if (isSell) {
     const eligible = wallets2.filter((w) => {
       const lastSell = lastSellTimestamp.get(w.index) ?? 0;
-      return Date.now() - lastSell >= SELL_COOLDOWN_MS;
+      const cooldownOk = Date.now() - lastSell >= SELL_COOLDOWN_MS;
+      const cachedEth = state.wallets.find((sw) => sw.index === w.index)?.ethBalance ?? 1;
+      return cooldownOk && cachedEth >= MIN_ETH_FOR_SELL;
     });
     if (eligible.length > 0) {
       const eligibleWeights = eligible.map((w) => WALLET_WEIGHTS2[w.index] ?? 0.25);
