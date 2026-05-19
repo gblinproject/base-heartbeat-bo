@@ -50790,34 +50790,60 @@ async function getEthBalance(address) {
 }
 async function distributeFunds(ethPriceUsd) {
   const ws = getOrCreateWallets();
-  const primary = ws[0];
-  const primaryBalance = await getEthBalance(primary.address);
+  const balances = await Promise.all(ws.map(async (w) => ({ w, bal: await getEthBalance(w.address) })));
+  const richest = balances.reduce((a, b) => b.bal > a.bal ? b : a, balances[0]);
+  const primary = richest.w;
+  const primaryBalance = richest.bal;
   const primaryUsd = primaryBalance * ethPriceUsd;
-  if (primaryUsd < 5) return;
-  const distributable = primaryBalance * 0.6 - 5e-4;
-  if (distributable <= 0) return;
-  const secondaryWeights = WALLET_WEIGHTS.slice(1);
-  const weightSum = secondaryWeights.reduce((a, b) => a + b, 0);
+  if (primaryUsd < 2) return;
+  const distributable = primaryBalance * 0.5 - 1e-3;
+  if (distributable <= 1e-4) return;
+  const others = balances.filter((b) => b.w.index !== primary.index);
+  const weightSum = others.reduce((s, b) => s + (WALLET_WEIGHTS[b.w.index] ?? 0.25), 0);
   logger.info(
-    { distributable: distributable.toFixed(6), primaryBalance: primaryBalance.toFixed(6) },
+    { source: `W${primary.index}`, distributable: distributable.toFixed(6), primaryBalance: primaryBalance.toFixed(6) },
     "Adaptive fund distribution across wallets..."
   );
-  for (let i = 1; i < ws.length; i++) {
-    const targetBalance = await getEthBalance(ws[i].address);
+  for (const { w: target, bal: targetBalance } of others) {
     if (targetBalance * ethPriceUsd >= 2) continue;
-    const proportion = (WALLET_WEIGHTS[i] ?? 0) / weightSum;
+    const proportion = (WALLET_WEIGHTS[target.index] ?? 0.25) / weightSum;
     const send = distributable * proportion;
-    if (send <= 0) continue;
+    if (send <= 1e-4) continue;
     try {
       const hash3 = await primary.walletClient.sendTransaction({
-        to: ws[i].address,
+        to: target.address,
         value: parseEther(send.toFixed(18))
       });
       await publicClient.waitForTransactionReceipt({ hash: hash3 });
-      logger.info({ to: ws[i].address, amount: send.toFixed(6), weight: proportion.toFixed(2) }, "Funds distributed (adaptive)");
+      logger.info({ to: target.address, amount: send.toFixed(6), weight: proportion.toFixed(2) }, "Funds distributed (adaptive)");
     } catch (err) {
-      logger.warn({ err, to: ws[i].address }, "Failed to distribute funds");
+      logger.warn({ err, to: target.address }, "Failed to distribute funds");
     }
+  }
+}
+async function topUpGasIfNeeded(target, minBalance, topUpAmount) {
+  const currentBal = await getEthBalance(target.address);
+  if (currentBal >= minBalance) return true;
+  const ws = getOrCreateWallets();
+  const others = ws.filter((w) => w.index !== target.index);
+  const bals = await Promise.all(others.map(async (w) => ({ w, bal: await getEthBalance(w.address) })));
+  const donor = bals.sort((a, b) => b.bal - a.bal)[0];
+  if (!donor || donor.bal < topUpAmount + 1e-3) {
+    logger.warn({ target: target.address, need: topUpAmount, bestDonor: donor?.bal?.toFixed(6) }, "No wallet has enough ETH to top up gas");
+    return false;
+  }
+  try {
+    logger.info({ from: `W${donor.w.index}`, to: `W${target.index}`, amount: topUpAmount }, "Gas top-up: sending ETH for sell gas...");
+    const hash3 = await donor.w.walletClient.sendTransaction({
+      to: target.address,
+      value: parseEther(topUpAmount.toFixed(18))
+    });
+    await publicClient.waitForTransactionReceipt({ hash: hash3 });
+    logger.info({ from: `W${donor.w.index}`, to: `W${target.index}`, amount: topUpAmount }, "Gas top-up confirmed \u2705");
+    return true;
+  } catch (err) {
+    logger.warn({ err, target: target.address }, "Gas top-up failed");
+    return false;
   }
 }
 
@@ -51668,10 +51694,14 @@ async function executeSellAerodrome(wallet, ethPriceUsd, manual = false, sellAmo
     record.error = "No token balance to sell";
     return record;
   }
-  const ethBalance = await getEthBalance(wallet.address);
+  let ethBalance = await getEthBalance(wallet.address);
   if (ethBalance < MIN_ETH_FOR_SELL) {
-    record.error = `Low ETH for gas: ${ethBalance.toFixed(6)} ETH (need ${MIN_ETH_FOR_SELL})`;
-    return record;
+    const topped = await topUpGasIfNeeded(wallet, MIN_ETH_FOR_SELL, 15e-4);
+    if (topped) ethBalance = await getEthBalance(wallet.address);
+    if (ethBalance < MIN_ETH_FOR_SELL) {
+      record.error = `Low ETH for gas: ${ethBalance.toFixed(6)} ETH (need ${MIN_ETH_FOR_SELL})`;
+      return record;
+    }
   }
   const lastSell = lastSellTimestamp.get(wallet.index) ?? 0;
   if (!manual && Date.now() - lastSell < SELL_COOLDOWN_MS) {
@@ -51762,14 +51792,18 @@ async function executeSell(wallet, ethPriceUsd, manual = false, sellAmountIn) {
     logger.warn({ wallet: wallet.address }, "Skipping sell \u2013 no token balance");
     return record;
   }
-  const ethBalance = await getEthBalance(wallet.address);
+  let ethBalance = await getEthBalance(wallet.address);
   if (ethBalance < MIN_ETH_FOR_SELL) {
-    record.error = `Low ETH for gas: ${ethBalance.toFixed(6)} ETH (need ${MIN_ETH_FOR_SELL})`;
-    logger.warn(
-      { wallet: wallet.address, ethBalance: ethBalance.toFixed(6), minRequired: MIN_ETH_FOR_SELL },
-      "Skipping sell \u2013 insufficient ETH for gas"
-    );
-    return record;
+    const topped = await topUpGasIfNeeded(wallet, MIN_ETH_FOR_SELL, 15e-4);
+    if (topped) ethBalance = await getEthBalance(wallet.address);
+    if (ethBalance < MIN_ETH_FOR_SELL) {
+      record.error = `Low ETH for gas: ${ethBalance.toFixed(6)} ETH (need ${MIN_ETH_FOR_SELL})`;
+      logger.warn(
+        { wallet: wallet.address, ethBalance: ethBalance.toFixed(6), minRequired: MIN_ETH_FOR_SELL },
+        "Skipping sell \u2013 insufficient ETH for gas"
+      );
+      return record;
+    }
   }
   const lastSell = lastSellTimestamp.get(wallet.index) ?? 0;
   if (!manual && Date.now() - lastSell < SELL_COOLDOWN_MS) {
@@ -52041,21 +52075,27 @@ async function bestExecutionSell(wallet, ethPriceUsd, manual = false) {
       error: "No token balance to sell"
     };
   }
-  const ethBalance = await getEthBalance(wallet.address);
+  let ethBalance = await getEthBalance(wallet.address);
   if (ethBalance < MIN_ETH_FOR_SELL) {
-    return {
-      timestamp: (/* @__PURE__ */ new Date()).toISOString(),
-      type: "sell",
-      walletIndex: wallet.index,
-      walletAddress: wallet.address,
-      ethAmount: 0,
-      usdAmount: 0,
-      tokenAmount: "0",
-      ethPriceUsd,
-      txHash: null,
-      success: false,
-      error: `Low ETH for gas: ${ethBalance.toFixed(6)} ETH (need ${MIN_ETH_FOR_SELL})`
-    };
+    const topped = await topUpGasIfNeeded(wallet, MIN_ETH_FOR_SELL, 15e-4);
+    if (topped) {
+      ethBalance = await getEthBalance(wallet.address);
+    }
+    if (ethBalance < MIN_ETH_FOR_SELL) {
+      return {
+        timestamp: (/* @__PURE__ */ new Date()).toISOString(),
+        type: "sell",
+        walletIndex: wallet.index,
+        walletAddress: wallet.address,
+        ethAmount: 0,
+        usdAmount: 0,
+        tokenAmount: "0",
+        ethPriceUsd,
+        txHash: null,
+        success: false,
+        error: `Low ETH for gas: ${ethBalance.toFixed(6)} ETH (need ${MIN_ETH_FOR_SELL})`
+      };
+    }
   }
   const lastSell = lastSellTimestamp.get(wallet.index) ?? 0;
   if (!manual && Date.now() - lastSell < SELL_COOLDOWN_MS) {
@@ -52174,7 +52214,8 @@ async function executeTrade(ethPriceUsd) {
       const lastSell = lastSellTimestamp.get(w.index) ?? 0;
       const cooldownOk = Date.now() - lastSell >= SELL_COOLDOWN_MS;
       const cachedEth = state.wallets.find((sw) => sw.index === w.index)?.ethBalance ?? 1;
-      return cooldownOk && cachedEth >= MIN_ETH_FOR_SELL;
+      const cachedTok = parseFloat(state.wallets.find((sw) => sw.index === w.index)?.tokenBalance ?? "0");
+      return cooldownOk && (cachedEth >= MIN_ETH_FOR_SELL || cachedTok > 0);
     });
     if (eligible.length > 0) {
       const eligibleWeights = eligible.map((w) => WALLET_WEIGHTS2[w.index] ?? 0.25);
@@ -52298,7 +52339,7 @@ async function checkFunding() {
     state.ethPriceUsd = ethPrice;
     state.lastCheck = (/* @__PURE__ */ new Date()).toISOString();
     await refreshBalances(ethPrice);
-    const totalUsd = state.wallets.reduce((s, w) => s + w.usdBalance, 0);
+    const totalUsd = state.wallets.reduce((s, w) => s + w.usdBalance + (w.tokenBalanceUsd || 0), 0);
     logger.info({ totalUsd: totalUsd.toFixed(2), threshold: FUNDED_THRESHOLD_USD }, "Balance check");
     if (totalUsd >= FUNDED_THRESHOLD_USD) {
       logger.info("Wallets funded! Starting organic heartbeat...");
@@ -52453,6 +52494,40 @@ function triggerSellGblinContract() {
     return executeSellGblinContract(wallet, p, sellAmount, true);
   }).then((r) => _recordTrade(r, "sell")).catch((err) => logger.error({ err }, "Manual SELL GBLIN contract failed"));
 }
+async function triggerForceSellAll() {
+  const ws = getOrCreateWallets();
+  const ethPriceUsd = await getEthPriceUsd();
+  state.ethPriceUsd = ethPriceUsd;
+  const results = [];
+  logger.info("Force-sell-all triggered \u2014 selling from every wallet with GBLIN");
+  for (const w of ws) {
+    const { raw: tokenRaw, human: tokenHuman } = await getTokenBalance(w.address);
+    if (tokenRaw === 0n) {
+      results.push({ wallet: `W${w.index}(${w.address.slice(0, 8)}\u2026)`, result: "skipped \u2013 no GBLIN" });
+      continue;
+    }
+    const pct = randomBetween(0.2, 0.35);
+    const sell = tokenRaw * BigInt(Math.floor(pct * 1e4)) / 10000n;
+    logger.info({ wallet: `W${w.index}`, tokens: tokenHuman, pct: (pct * 100).toFixed(0) + "%" }, "Force-sell: executing on wallet");
+    let record;
+    try {
+      record = await bestExecutionSell(w, ethPriceUsd, true);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      results.push({ wallet: `W${w.index}(${w.address.slice(0, 8)}\u2026)`, result: `error: ${msg}` });
+      continue;
+    }
+    if (record.success) {
+      _recordTrade(record, "sell");
+      results.push({ wallet: `W${w.index}(${w.address.slice(0, 8)}\u2026)`, result: `sold \u2192 ${record.ethAmount?.toFixed(6)} ETH (tx: ${record.txHash})` });
+    } else {
+      results.push({ wallet: `W${w.index}(${w.address.slice(0, 8)}\u2026)`, result: `failed: ${record.error}` });
+    }
+    await sleep(2e3);
+  }
+  logger.info({ results }, "Force-sell-all complete");
+  return results;
+}
 function getMetrics() {
   const trades = state.recentTrades;
   const uptimeSec = botStartedAt ? Math.round((Date.now() - botStartedAt) / 1e3) : 0;
@@ -52591,6 +52666,15 @@ router2.post("/bot/sell-gblin", (_req, res) => {
   if (!guardRunning(res)) return;
   res.json({ message: "SELL forzato su contratto GBLIN \u2014 controlla /api/bot/status tra qualche secondo" });
   triggerSellGblinContract();
+});
+router2.post("/bot/sell-all", async (_req, res) => {
+  try {
+    const results = await triggerForceSellAll();
+    res.json({ message: "Force-sell-all completato", results });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
 });
 var bot_default = router2;
 

@@ -8,6 +8,7 @@ import {
   getEthBalance,
   getAllBalances,
   distributeFunds,
+  topUpGasIfNeeded,
   publicClient,
 } from "./wallet.js";
 import { logger } from "../lib/logger.js";
@@ -1125,10 +1126,14 @@ async function executeSellAerodrome(
     record.error = "No token balance to sell";
     return record;
   }
-  const ethBalance = await getEthBalance(wallet.address);
+  let ethBalance = await getEthBalance(wallet.address);
   if (ethBalance < MIN_ETH_FOR_SELL) {
-    record.error = `Low ETH for gas: ${ethBalance.toFixed(6)} ETH (need ${MIN_ETH_FOR_SELL})`;
-    return record;
+    const topped = await topUpGasIfNeeded(wallet, MIN_ETH_FOR_SELL, 0.0015);
+    if (topped) ethBalance = await getEthBalance(wallet.address);
+    if (ethBalance < MIN_ETH_FOR_SELL) {
+      record.error = `Low ETH for gas: ${ethBalance.toFixed(6)} ETH (need ${MIN_ETH_FOR_SELL})`;
+      return record;
+    }
   }
   const lastSell = lastSellTimestamp.get(wallet.index) ?? 0;
   if (!manual && Date.now() - lastSell < SELL_COOLDOWN_MS) {
@@ -1235,14 +1240,18 @@ async function executeSell(
   }
 
   // ETH guard: sell requires 2 TXs, both need gas
-  const ethBalance = await getEthBalance(wallet.address);
+  let ethBalance = await getEthBalance(wallet.address);
   if (ethBalance < MIN_ETH_FOR_SELL) {
-    record.error = `Low ETH for gas: ${ethBalance.toFixed(6)} ETH (need ${MIN_ETH_FOR_SELL})`;
-    logger.warn(
-      { wallet: wallet.address, ethBalance: ethBalance.toFixed(6), minRequired: MIN_ETH_FOR_SELL },
-      "Skipping sell – insufficient ETH for gas"
-    );
-    return record;
+    const topped = await topUpGasIfNeeded(wallet, MIN_ETH_FOR_SELL, 0.0015);
+    if (topped) ethBalance = await getEthBalance(wallet.address);
+    if (ethBalance < MIN_ETH_FOR_SELL) {
+      record.error = `Low ETH for gas: ${ethBalance.toFixed(6)} ETH (need ${MIN_ETH_FOR_SELL})`;
+      logger.warn(
+        { wallet: wallet.address, ethBalance: ethBalance.toFixed(6), minRequired: MIN_ETH_FOR_SELL },
+        "Skipping sell – insufficient ETH for gas"
+      );
+      return record;
+    }
   }
 
   // Cooldown: avoid selling the same wallet twice in quick succession
@@ -1575,15 +1584,22 @@ async function bestExecutionSell(
       txHash: null, success: false, error: "No token balance to sell",
     };
   }
-  const ethBalance = await getEthBalance(wallet.address);
+  let ethBalance = await getEthBalance(wallet.address);
   if (ethBalance < MIN_ETH_FOR_SELL) {
-    return {
-      timestamp: new Date().toISOString(), type: "sell",
-      walletIndex: wallet.index, walletAddress: wallet.address,
-      ethAmount: 0, usdAmount: 0, tokenAmount: "0", ethPriceUsd,
-      txHash: null, success: false,
-      error: `Low ETH for gas: ${ethBalance.toFixed(6)} ETH (need ${MIN_ETH_FOR_SELL})`,
-    };
+    // Attempt gas top-up from the richest other wallet before giving up
+    const topped = await topUpGasIfNeeded(wallet, MIN_ETH_FOR_SELL, 0.0015);
+    if (topped) {
+      ethBalance = await getEthBalance(wallet.address);
+    }
+    if (ethBalance < MIN_ETH_FOR_SELL) {
+      return {
+        timestamp: new Date().toISOString(), type: "sell",
+        walletIndex: wallet.index, walletAddress: wallet.address,
+        ethAmount: 0, usdAmount: 0, tokenAmount: "0", ethPriceUsd,
+        txHash: null, success: false,
+        error: `Low ETH for gas: ${ethBalance.toFixed(6)} ETH (need ${MIN_ETH_FOR_SELL})`,
+      };
+    }
   }
   const lastSell = lastSellTimestamp.get(wallet.index) ?? 0;
   if (!manual && Date.now() - lastSell < SELL_COOLDOWN_MS) {
@@ -1721,13 +1737,15 @@ async function executeTrade(ethPriceUsd: number): Promise<TradeRecord> {
   const isSell   = Math.random() < sellProb;
 
   if (isSell) {
-    // For sells, pick only wallets that aren't in cooldown AND have enough ETH for gas.
-    // Using cached state balances (refreshed each cycle) to avoid extra RPC calls.
+    // For sells, pick wallets not in cooldown that either have ETH for gas (normal)
+    // OR have GBLIN tokens (gas top-up will be attempted in the sell function itself).
     const eligible = wallets.filter((w) => {
-      const lastSell = lastSellTimestamp.get(w.index) ?? 0;
+      const lastSell   = lastSellTimestamp.get(w.index) ?? 0;
       const cooldownOk = Date.now() - lastSell >= SELL_COOLDOWN_MS;
       const cachedEth  = state.wallets.find((sw) => sw.index === w.index)?.ethBalance ?? 1;
-      return cooldownOk && cachedEth >= MIN_ETH_FOR_SELL;
+      const cachedTok  = parseFloat(state.wallets.find((sw) => sw.index === w.index)?.tokenBalance ?? "0");
+      // Include wallets with GBLIN even if ETH is low — sell path will top up gas automatically
+      return cooldownOk && (cachedEth >= MIN_ETH_FOR_SELL || cachedTok > 0);
     });
 
     if (eligible.length > 0) {
@@ -1893,7 +1911,8 @@ async function checkFunding() {
 
     await refreshBalances(ethPrice);
 
-    const totalUsd = state.wallets.reduce((s, w) => s + w.usdBalance, 0);
+    // Count both ETH value AND token value — GBLIN holdings count toward the threshold
+    const totalUsd = state.wallets.reduce((s, w) => s + w.usdBalance + (w.tokenBalanceUsd || 0), 0);
     logger.info({ totalUsd: totalUsd.toFixed(2), threshold: FUNDED_THRESHOLD_USD }, "Balance check");
 
     if (totalUsd >= FUNDED_THRESHOLD_USD) {
@@ -2075,6 +2094,56 @@ export function triggerSellGblinContract(): void {
     return executeSellGblinContract(wallet, p, sellAmount, true);
   }).then((r) => _recordTrade(r, "sell"))
     .catch((err) => logger.error({ err }, "Manual SELL GBLIN contract failed"));
+}
+
+/**
+ * Force-sells GBLIN from EVERY wallet that has a non-zero balance.
+ * Sends gas top-up from the richest wallet when needed.
+ * Works even when the bot is in "waiting_for_funds" state.
+ * Sells a small random slice (15–35%) from each wallet sequentially.
+ */
+export async function triggerForceSellAll(): Promise<{ wallet: string; result: string }[]> {
+  const ws = getOrCreateWallets();
+  const ethPriceUsd = await getEthPriceUsd();
+  state.ethPriceUsd = ethPriceUsd;
+  const results: { wallet: string; result: string }[] = [];
+
+  logger.info("Force-sell-all triggered — selling from every wallet with GBLIN");
+
+  for (const w of ws) {
+    const { raw: tokenRaw, human: tokenHuman } = await getTokenBalance(w.address);
+    if (tokenRaw === 0n) {
+      results.push({ wallet: `W${w.index}(${w.address.slice(0, 8)}…)`, result: "skipped – no GBLIN" });
+      continue;
+    }
+
+    // Sell 20–35% of holdings per wallet
+    const pct  = randomBetween(0.20, 0.35);
+    const sell = (tokenRaw * BigInt(Math.floor(pct * 10000))) / 10000n;
+    logger.info({ wallet: `W${w.index}`, tokens: tokenHuman, pct: (pct * 100).toFixed(0) + "%" }, "Force-sell: executing on wallet");
+
+    let record: TradeRecord;
+    try {
+      record = await bestExecutionSell(w, ethPriceUsd, true);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      results.push({ wallet: `W${w.index}(${w.address.slice(0, 8)}…)`, result: `error: ${msg}` });
+      continue;
+    }
+
+    if (record.success) {
+      _recordTrade(record, "sell");
+      results.push({ wallet: `W${w.index}(${w.address.slice(0, 8)}…)`, result: `sold → ${record.ethAmount?.toFixed(6)} ETH (tx: ${record.txHash})` });
+    } else {
+      results.push({ wallet: `W${w.index}(${w.address.slice(0, 8)}…)`, result: `failed: ${record.error}` });
+    }
+
+    // Brief pause between wallets to avoid RPC congestion
+    await sleep(2000);
+  }
+
+  logger.info({ results }, "Force-sell-all complete");
+  return results;
 }
 
 // ─── Metrics ──────────────────────────────────────────────────────────────────
