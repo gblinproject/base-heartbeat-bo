@@ -1390,13 +1390,19 @@ async function executeBuyGblinContract(
       functionName: "buyGBLIN",
       args:         [0n], // minGblinOut = 0 (best-execution already verified)
       value:        safeEthWei,
-      gas:          600_000n, // buyGBLIN does internal swaps — needs more gas
+      gas:          3_000_000n, // V6 buyGBLIN does internal basket swaps (cbBTC/USDC) — needs ample gas
       gasPrice,
     });
     const tokBefore = await getTokenBalance(wallet.address);
-    await publicClient.waitForTransactionReceipt({ hash });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    record.txHash = hash;
+    if (receipt.status !== "success") {
+      record.error = `buyGBLIN reverted on-chain (${hash})`;
+      logger.error({ hash, status: receipt.status }, "BUY GBLIN contract FAILED on-chain ❌");
+      sendTradeAlert(record).catch(() => {});
+      return record;
+    }
     const tokAfter  = await getTokenBalance(wallet.address);
-    record.txHash      = hash;
     record.tokenAmount = formatUnits(
       tokAfter.raw > tokBefore.raw ? tokAfter.raw - tokBefore.raw : 0n,
       TOKEN_DECIMALS
@@ -1462,6 +1468,7 @@ async function executeSellGblinContract(
       abi:          GBLIN_CONTRACT_ABI,
       functionName: "sellGBLINForEth",
       args:         [sellAmount, 0n], // minEthOut = 0 (best-execution already verified)
+      gas:          3_000_000n, // V6 sellGBLINForEth swaps basket back to ETH — needs ample gas
       gasPrice:     swapGasPrice,
     });
     const swapReceipt  = await publicClient.waitForTransactionReceipt({ hash: swapHash });
