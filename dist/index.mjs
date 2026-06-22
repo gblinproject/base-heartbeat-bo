@@ -50970,7 +50970,7 @@ var BUY_PRESETS = [
 ];
 var WALLET_WEIGHTS2 = [0.35, 0.3, 0.2, 0.15];
 var MIN_ETH_FOR_SELL = 5e-4;
-var ETH_RESERVE = 1e-3;
+var ETH_RESERVE = 4e-4;
 var SWAP_ROUTER_ABI = [
   {
     name: "exactInputSingle",
