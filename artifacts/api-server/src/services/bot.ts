@@ -19,20 +19,20 @@ import { fileURLToPath } from "url";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const TOKEN_ADDRESS = "0x38DcDB3A381677239BBc652aed9811F2f8496345" as `0x${string}`;
+const TOKEN_ADDRESS = "0x36C81d7E1966310F305eA637e761Cf77F90852f0" as `0x${string}`;
 const WETH_ADDRESS  = "0x4200000000000000000000000000000000000006" as `0x${string}`;
 
 /** Uniswap V3 SwapRouter on Base — used for both BUY and SELL */
 const UNI_ROUTER  = "0x2626664c2603336E57B271c5C0b26F421741e481" as `0x${string}`;
 
 /** Uniswap V3 GBLIN/WETH pool on Base (fee 300 = 0.03%) */
-const UNI_POOL     = "0x8fdda852a7b106b08848da676b8793814d561617" as `0x${string}`;
-const UNI_POOL_FEE = 300; // 0.03%
+const UNI_POOL     = "0xAb305c45F4E42A73909a49a6775e3f7782239dAE" as `0x${string}`;
+const UNI_POOL_FEE = 3000; // 0.3%
 
 /** Aerodrome V1 volatile pool: TOKEN/WETH */
 const AERO_ROUTER  = "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43" as `0x${string}`;
 const AERO_FACTORY = "0x420DD381b31aEf6683db6B902084cB0FFECe40Da" as `0x${string}`;
-const AERO_POOL    = "0x7dcd4f5bcdae0546c84dab54401a93ad6e92ae1b" as `0x${string}`;
+const AERO_POOL    = "0x6Ac18D5e90278D2477027B5769EFb2fF0711FFbB" as `0x${string}`;
 
 
 /** Base sell probability (adjusted dynamically by price momentum) */
@@ -1960,7 +1960,7 @@ export async function startBot() {
         network:       "Base Mainnet",
         threshold:     `$${FUNDED_THRESHOLD_USD}`,
         token:         TOKEN_ADDRESS,
-        uniPool:       "0x8fdDa852a7b106b08848da676b8793814D561617",
+        uniPool:       "0xAb305c45F4E42A73909a49a6775e3f7782239dAE",
         aeroPool:      AERO_POOL,
         uniRouter:     UNI_ROUTER,
         aeroRouter:    AERO_ROUTER,

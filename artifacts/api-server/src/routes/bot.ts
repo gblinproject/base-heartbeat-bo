@@ -29,7 +29,7 @@ router.get("/bot/status", (_req, res) => {
       totalGblinUsd:   state.wallets.reduce((s, w) => s + (w.tokenBalanceUsd || 0), 0).toFixed(2),
     },
     heartbeat: {
-      targetToken: "0x38DcDB3A381677239BBc652aed9811F2f8496345",
+      targetToken: "0x36C81d7E1966310F305eA637e761Cf77F90852f0",
       buyAmountRangeUsd: { min: 0.50, max: 1.50 },
       dexRouting: "best-execution: Uniswap V3 / Aerodrome V1 / GBLIN contract (quoted in parallel, cheapest wins)",
       sellAmountRange: "15–85% of token holdings",

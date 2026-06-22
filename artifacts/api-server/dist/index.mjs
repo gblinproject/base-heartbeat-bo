@@ -50945,14 +50945,14 @@ async function sendTradeAlert(alert) {
 import { readFileSync as readFileSync2, writeFileSync as writeFileSync2, existsSync as existsSync2 } from "fs";
 import { resolve as resolve2 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
-var TOKEN_ADDRESS = "0x38DcDB3A381677239BBc652aed9811F2f8496345";
+var TOKEN_ADDRESS = "0x36C81d7E1966310F305eA637e761Cf77F90852f0";
 var WETH_ADDRESS = "0x4200000000000000000000000000000000000006";
 var UNI_ROUTER = "0x2626664c2603336E57B271c5C0b26F421741e481";
-var UNI_POOL = "0x8fdda852a7b106b08848da676b8793814d561617";
-var UNI_POOL_FEE = 300;
+var UNI_POOL = "0xAb305c45F4E42A73909a49a6775e3f7782239dAE";
+var UNI_POOL_FEE = 3000;
 var AERO_ROUTER = "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43";
 var AERO_FACTORY = "0x420DD381b31aEf6683db6B902084cB0FFECe40Da";
-var AERO_POOL = "0x7dcd4f5bcdae0546c84dab54401a93ad6e92ae1b";
+var AERO_POOL = "0x6Ac18D5e90278D2477027B5769EFb2fF0711FFbB";
 var SELL_PROBABILITY_BASE = 0.4;
 var SELL_PCT_MIN = 0.15;
 var SELL_PCT_MAX = 0.85;
@@ -52380,7 +52380,7 @@ async function startBot() {
         network: "Base Mainnet",
         threshold: `$${FUNDED_THRESHOLD_USD}`,
         token: TOKEN_ADDRESS,
-        uniPool: "0x8fdDa852a7b106b08848da676b8793814D561617",
+        uniPool: "0xAb305c45F4E42A73909a49a6775e3f7782239dAE",
         aeroPool: AERO_POOL,
         uniRouter: UNI_ROUTER,
         aeroRouter: AERO_ROUTER,
@@ -52599,7 +52599,7 @@ router2.get("/bot/status", (_req, res) => {
       totalGblinUsd: state2.wallets.reduce((s, w) => s + (w.tokenBalanceUsd || 0), 0).toFixed(2)
     },
     heartbeat: {
-      targetToken: "0x38DcDB3A381677239BBc652aed9811F2f8496345",
+      targetToken: "0x36C81d7E1966310F305eA637e761Cf77F90852f0",
       buyAmountRangeUsd: { min: 0.5, max: 1.5 },
       dexRouting: "best-execution: Uniswap V3 / Aerodrome V1 / GBLIN contract (quoted in parallel, cheapest wins)",
       sellAmountRange: "15\u201385% of token holdings",

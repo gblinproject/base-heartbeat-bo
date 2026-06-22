@@ -1923,7 +1923,7 @@ export async function startBot() {
         network:       "Base Mainnet",
         threshold:     `$${FUNDED_THRESHOLD_USD}`,
         token:         TOKEN_ADDRESS,
-        uniPool:       "0x8fdDa852a7b106b08848da676b8793814D561617",
+        uniPool:       "0xAb305c45F4E42A73909a49a6775e3f7782239dAE",
         aeroPool:      AERO_POOL,
         uniRouter:     UNI_ROUTER,
         aeroRouter:    AERO_ROUTER,
@@ -2124,14 +2124,4 @@ export function getMetrics() {
       walletCounters: Array.from({ length: 4 }, (_, i) => ({
         walletIndex:      i,
         consecutiveBuys:  consecutiveBuys.get(i) ?? 0,
-        currentThreshold: getRebalanceThreshold(i),
-      })),
-    },
-
-    walletStats,
-
-    nextTradeAt:     state.nextTradeAt,
-    nextIntervalSec: state.nextIntervalSec,
-    lastTrade:       state.lastTrade,
-  };
-}
+        currentThreshold: getRebalanc
