@@ -5,7 +5,7 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "node dist/index.mjs",
+    "startCommand": "sh /app/start.sh",
     "healthcheckPath": "/api/healthz",
     "healthcheckTimeout": 30,
     "restartPolicyType": "ON_FAILURE",
