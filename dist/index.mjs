@@ -51325,7 +51325,18 @@ function selectWalletIndex() {
 }
 function selectBestFundedWallet() {
   const ws = getOrCreateWallets();
-  return ws.reduce((best, w) => w.ethBalance > best.ethBalance ? w : best, ws[0]);
+  // Real ETH balances live in state.wallets — the wallet objects from
+  // getOrCreateWallets() have NO ethBalance field (the old reduce always
+  // returned ws[0]=W0 because undefined > undefined is false).
+  let bestIndex = ws[0].index;
+  let bestBal = -1;
+  for (const sw of state.wallets) {
+    if (typeof sw.ethBalance === "number" && sw.ethBalance > bestBal) {
+      bestBal = sw.ethBalance;
+      bestIndex = sw.index;
+    }
+  }
+  return ws.find((w) => w.index === bestIndex) ?? ws[0];
 }
 function selectBuyAmountUsd() {
   const r = Math.random();

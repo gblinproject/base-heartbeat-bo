@@ -611,9 +611,19 @@ function selectWalletIndex(): number {
 }
 
 /** For manual test triggers: always pick the wallet with the highest ETH balance. */
-function selectBestFundedWallet(): WalletInfo {
+function selectBestFundedWallet() {
   const ws = getOrCreateWallets();
-  return ws.reduce((best, w) => w.ethBalance > best.ethBalance ? w : best, ws[0]!);
+  // Real ETH balances live in state.wallets — the wallet objects from
+  // getOrCreateWallets() have no ethBalance field (old reduce always picked W0).
+  let bestIndex = ws[0]!.index;
+  let bestBal = -1;
+  for (const sw of state.wallets) {
+    if (typeof sw.ethBalance === "number" && sw.ethBalance > bestBal) {
+      bestBal = sw.ethBalance;
+      bestIndex = sw.index;
+    }
+  }
+  return ws.find((w) => w.index === bestIndex) ?? ws[0]!;
 }
 
 // ─── Buy amount selection (weighted presets) ───────────────────────────────────
