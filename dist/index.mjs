@@ -50738,7 +50738,7 @@ var logger = (0, import_pino.default)({
 // src/services/wallet.ts
 var __dirname2 = dirname(fileURLToPath(import.meta.url));
 var WALLET_DATA_PATH = resolve(__dirname2, "../wallet-data.json");
-var BASE_RPC = "https://mainnet.base.org";
+var BASE_RPC = process.env.RPC_URL || process.env.BASE_RPC_URL || "https://mainnet.base.org";
 var NUM_WALLETS = 4;
 var WALLET_WEIGHTS = [0.35, 0.3, 0.2, 0.15];
 var publicClient = createPublicClient({
