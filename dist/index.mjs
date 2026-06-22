@@ -51314,6 +51314,38 @@ function currentSellProbability(ethPriceUsd) {
   if (pct < -0.015) return 0.25;
   return SELL_PROBABILITY_BASE;
 }
+// NAV-aware direction: the GBLIN contract redeems/mints at NAV (treasury value),
+// while the pools have their own market price. Trading toward the peg is the
+// profitable direction (buy below NAV, sell above NAV) and keeps the pools pegged.
+// A dead-band (~1%) absorbs fees so we don't churn pointlessly inside fair value.
+async function navAwareSellProbability(ethPriceUsd) {
+  try {
+    const ONE_GBLIN = 10n ** 18n;
+    const [navWei, uniWei, aeroWei] = await Promise.all([
+      quoteGblinContractSell(ONE_GBLIN).catch(() => 0n),
+      quoteUniSell(ONE_GBLIN).catch(() => 0n),
+      quoteAerodromeSell(ONE_GBLIN).catch(() => 0n)
+    ]);
+    const poolWei = uniWei > aeroWei ? uniWei : aeroWei; // best ETH a pool seller would get
+    if (navWei <= 0n || poolWei <= 0n) return currentSellProbability(ethPriceUsd);
+    const dev = (Number(poolWei) - Number(navWei)) / Number(navWei);
+    state.pegDeviation = dev;
+    const BAND = 0.01; // 1% dead-band covering swap fees
+    if (dev > BAND) {
+      const p = Math.min(0.9, 0.55 + dev * 4);
+      logger.info({ pegDeviationPct: (dev * 100).toFixed(2) + "%", sellBias: (p * 100).toFixed(0) + "%" }, "NAV-aware: pool ABOVE NAV -> bias SELL (sell high, restore peg)");
+      return p;
+    }
+    if (dev < -BAND) {
+      const p = Math.max(0.1, 0.25 + dev * 2);
+      logger.info({ pegDeviationPct: (dev * 100).toFixed(2) + "%", buyBias: ((1 - p) * 100).toFixed(0) + "%" }, "NAV-aware: pool BELOW NAV -> bias BUY (buy low, restore peg)");
+      return p;
+    }
+    return SELL_PROBABILITY_BASE;
+  } catch {
+    return currentSellProbability(ethPriceUsd);
+  }
+}
 function selectWalletIndex() {
   const r = Math.random();
   let cumulative = 0;
@@ -52226,7 +52258,7 @@ async function executeTrade(ethPriceUsd) {
       return withRetry2(() => bestExecutionSell(rebalanceCandidate, ethPriceUsd));
     }
   }
-  const sellProb = currentSellProbability(ethPriceUsd);
+  const sellProb = await navAwareSellProbability(ethPriceUsd);
   const isSell = Math.random() < sellProb;
   if (isSell) {
     const eligible = wallets2.filter((w) => {
