@@ -52266,7 +52266,7 @@ async function executeTrade(ethPriceUsd) {
       const cooldownOk = Date.now() - lastSell >= SELL_COOLDOWN_MS;
       const cachedEth = state.wallets.find((sw) => sw.index === w.index)?.ethBalance ?? 1;
       const cachedTok = parseFloat(state.wallets.find((sw) => sw.index === w.index)?.tokenBalance ?? "0");
-      return cooldownOk && (cachedEth >= MIN_ETH_FOR_SELL || cachedTok > 0);
+      return cooldownOk && cachedTok > 0 && cachedEth >= MIN_ETH_FOR_SELL;
     });
     if (eligible.length > 0) {
       const eligibleWeights = eligible.map((w) => WALLET_WEIGHTS2[w.index] ?? 0.25);
@@ -52284,7 +52284,7 @@ async function executeTrade(ethPriceUsd) {
       logger.info({ sellProbability: (sellProb * 100).toFixed(0) + "%" }, "Trade type: SELL (best execution)");
       return withRetry2(() => bestExecutionSell(chosen, ethPriceUsd));
     }
-    logger.info("All wallets in sell cooldown \u2013 falling back to BUY");
+    logger.info("No sellable inventory (or all in cooldown) \u2013 falling back to BUY (best-execution will mint at NAV on the contract)");
   }
   const walletIdx = selectWalletIndex();
   const wallet = wallets2[walletIdx];

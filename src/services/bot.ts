@@ -1758,7 +1758,13 @@ async function executeTrade(ethPriceUsd: number): Promise<TradeRecord> {
     // For sells, pick only wallets that hold tokens and aren't in cooldown
     const eligible = wallets.filter((w) => {
       const lastSell = lastSellTimestamp.get(w.index) ?? 0;
-      return Date.now() - lastSell >= SELL_COOLDOWN_MS;
+      const cooldownOk = Date.now() - lastSell >= SELL_COOLDOWN_MS;
+      const sw = state.wallets.find((x) => x.index === w.index);
+      const cachedEth = sw?.ethBalance ?? 1;
+      const cachedTok = parseFloat(sw?.tokenBalance ?? "0");
+      // Must actually hold GBLIN to sell, plus gas; otherwise fall back to BUY
+      // (best-execution then mints at NAV on the contract = buy low).
+      return cooldownOk && cachedTok > 0 && cachedEth >= MIN_ETH_FOR_SELL;
     });
 
     if (eligible.length > 0) {
