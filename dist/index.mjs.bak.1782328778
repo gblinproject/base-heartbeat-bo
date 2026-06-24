@@ -51099,31 +51099,6 @@ var AERO_AMOUNTS_ABI = [
 ];
 var GBLIN_CONTRACT_ABI = [
   {
-    name: "refreshWeights",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [],
-    outputs: []
-  },
-  {
-    name: "incentivizedRebalance",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "assetIndex", type: "uint256" },
-      { name: "isWethToAsset", type: "bool" },
-      { name: "amountToSwap", type: "uint256" }
-    ],
-    outputs: []
-  },
-  {
-    name: "basketLength",
-    type: "function",
-    stateMutability: "view",
-    inputs: [],
-    outputs: [{ name: "", type: "uint256" }]
-  },
-  {
     name: "buyGBLIN",
     type: "function",
     stateMutability: "payable",
@@ -51183,11 +51158,6 @@ var ERC20_ABI = [
   }
 ];
 var state = {
-  shieldLastRefreshAt: null,
-  shieldLastRefreshTx: null,
-  shieldRefreshCount: 0,
-  shieldLastRebalanceAt: null,
-  shieldLastRebalanceTx: null,
   status: "initializing",
   wallets: [],
   ethPriceUsd: 0,
@@ -52478,7 +52448,6 @@ async function startBot() {
       pollingTimer = setInterval(checkFunding, POLLING_INTERVAL_MS);
     }
     startWatchdog();
-    startShieldKeeper();
     logger.info("Watchdog started \u2014 scheduler will be auto-revived if it dies");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -52486,95 +52455,6 @@ async function startBot() {
     state.errorMessage = msg;
     logger.error({ err }, "Bot failed to initialize");
   }
-}
-var SHIELD_POKE_INTERVAL_MS = 60 * 60 * 1000;
-var shieldKeeperTimer = null;
-var lastRebalanceDayKey = "";
-async function pokeRefreshWeights() {
-  if (!isRunning) return;
-  const wallet = selectBestFundedWallet();
-  if (!wallet) return;
-  try {
-    const gasPrice = await getVariedGasPrice();
-    const hash = await wallet.walletClient.writeContract({
-      address: TOKEN_ADDRESS,
-      abi: GBLIN_CONTRACT_ABI,
-      functionName: "refreshWeights",
-      args: [],
-      gas: 600000n,
-      gasPrice
-    });
-    const receipt = await publicClient.waitForTransactionReceipt({ hash });
-    if (receipt.status === "success") {
-      state.shieldLastRefreshAt = new Date().toISOString();
-      state.shieldLastRefreshTx = hash;
-      state.shieldRefreshCount = (state.shieldRefreshCount || 0) + 1;
-      logger.info({ hash, wallet: wallet.address }, "Crash-shield refreshWeights() poked OK");
-    } else {
-      logger.warn({ hash }, "refreshWeights() reverted on-chain");
-    }
-  } catch (err) {
-    logger.error({ err }, "refreshWeights() poke failed");
-  }
-}
-async function maybeDailyRebalance() {
-  if (!isRunning) return;
-  const today = new Date().toISOString().slice(0, 10);
-  if (lastRebalanceDayKey === today) return;
-  const wallet = selectBestFundedWallet();
-  if (!wallet) return;
-  let basketLen = 3;
-  try {
-    basketLen = Number(await publicClient.readContract({
-      address: TOKEN_ADDRESS, abi: GBLIN_CONTRACT_ABI, functionName: "basketLength"
-    }));
-  } catch (e) {}
-  for (let idx = 0; idx < basketLen; idx++) {
-    for (const isWethToAsset of [true, false]) {
-      const amt = isWethToAsset ? 20000000000000000n : 10n ** 18n;
-      try {
-        await publicClient.simulateContract({
-          account: wallet.address,
-          address: TOKEN_ADDRESS,
-          abi: GBLIN_CONTRACT_ABI,
-          functionName: "incentivizedRebalance",
-          args: [BigInt(idx), isWethToAsset, amt]
-        });
-      } catch (e) {
-        continue;
-      }
-      try {
-        const gasPrice = await getVariedGasPrice();
-        const hash = await wallet.walletClient.writeContract({
-          address: TOKEN_ADDRESS,
-          abi: GBLIN_CONTRACT_ABI,
-          functionName: "incentivizedRebalance",
-          args: [BigInt(idx), isWethToAsset, amt],
-          gas: 3000000n,
-          gasPrice
-        });
-        const receipt = await publicClient.waitForTransactionReceipt({ hash });
-        if (receipt.status === "success") {
-          lastRebalanceDayKey = today;
-          state.shieldLastRebalanceAt = new Date().toISOString();
-          state.shieldLastRebalanceTx = hash;
-          logger.info({ hash, idx, isWethToAsset }, "Daily incentivizedRebalance executed OK (also refreshed shield)");
-          return;
-        }
-      } catch (err) {
-        logger.warn({ err, idx, isWethToAsset }, "incentivizedRebalance send failed - trying next");
-      }
-    }
-  }
-}
-function startShieldKeeper() {
-  if (shieldKeeperTimer) return;
-  setTimeout(() => { pokeRefreshWeights().catch(() => {}); }, 60000);
-  shieldKeeperTimer = setInterval(() => {
-    if (!isRunning) return;
-    pokeRefreshWeights().catch(() => {});
-    maybeDailyRebalance().catch(() => {});
-  }, SHIELD_POKE_INTERVAL_MS);
 }
 function getBotState() {
   return { ...state };
@@ -52811,14 +52691,6 @@ router2.get("/bot/status", (_req, res) => {
     lastCheck: state2.lastCheck,
     lastTrade: state2.lastTrade,
     recentTrades: state2.recentTrades,
-    shield: {
-      lastRefreshAt: state2.shieldLastRefreshAt ?? null,
-      lastRefreshTx: state2.shieldLastRefreshTx ?? null,
-      refreshCount: state2.shieldRefreshCount ?? 0,
-      lastRebalanceAt: state2.shieldLastRebalanceAt ?? null,
-      lastRebalanceTx: state2.shieldLastRebalanceTx ?? null,
-      tuning: "slowDecay/fullSlash via setShieldCurve"
-    },
     errorMessage: state2.errorMessage
   });
 });

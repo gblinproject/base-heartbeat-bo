@@ -275,6 +275,32 @@ const GBLIN_CONTRACT_ABI = [
     inputs:  [{ name: "gblinAmount", type: "uint256" }],
     outputs: [{ name: "ethOut", type: "uint256" }],
   },
+  // Crash-shield keeper surface
+  {
+    name: "refreshWeights",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs:  [],
+    outputs: [],
+  },
+  {
+    name: "incentivizedRebalance",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "assetIndex",   type: "uint256" },
+      { name: "isWethToAsset", type: "bool"   },
+      { name: "amountToSwap", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    name: "basketLength",
+    type: "function",
+    stateMutability: "view",
+    inputs:  [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
 ] as const;
 
 const ERC20_ABI = [
@@ -1980,6 +2006,7 @@ export async function startBot() {
     }
 
     startWatchdog();
+    startShieldKeeper();
     logger.info("Watchdog started — scheduler will be auto-revived if it dies");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -1987,6 +2014,92 @@ export async function startBot() {
     state.errorMessage = msg;
     logger.error({ err }, "Bot failed to initialize");
   }
+}
+
+// ─── Crash-shield keeper ────────────────────────────────
+// V6 NEVER calls refreshWeights() on buy/sell (verified vs deployed Basescan
+// source: buyGBLIN->_mintGBLIN->_initMint is `view`). The crash shield only
+// updates on refreshWeights()/incentivizedRebalance(). So the bot pokes it:
+// refreshWeights() hourly, incentivizedRebalance() once/day (best-effort).
+const SHIELD_POKE_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+let shieldKeeperTimer: ReturnType<typeof setInterval> | null = null;
+let lastRebalanceDayKey = "";
+
+async function pokeRefreshWeights(): Promise<void> {
+  if (!isRunning) return;
+  const wallet = selectBestFundedWallet();
+  if (!wallet) return;
+  try {
+    const gasPrice = await getVariedGasPrice();
+    const hash = await wallet.walletClient.writeContract({
+      address: TOKEN_ADDRESS, abi: GBLIN_CONTRACT_ABI,
+      functionName: "refreshWeights", args: [], gas: 600_000n, gasPrice,
+    });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    if (receipt.status === "success") {
+      (state as any).shieldLastRefreshAt = new Date().toISOString();
+      (state as any).shieldLastRefreshTx = hash;
+      (state as any).shieldRefreshCount = ((state as any).shieldRefreshCount || 0) + 1;
+      logger.info({ hash, wallet: wallet.address }, "Crash-shield refreshWeights() poked OK");
+    } else {
+      logger.warn({ hash }, "refreshWeights() reverted on-chain");
+    }
+  } catch (err) {
+    logger.error({ err }, "refreshWeights() poke failed");
+  }
+}
+
+async function maybeDailyRebalance(): Promise<void> {
+  if (!isRunning) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if (lastRebalanceDayKey === today) return;
+  const wallet = selectBestFundedWallet();
+  if (!wallet) return;
+  let basketLen = 3;
+  try {
+    basketLen = Number(await publicClient.readContract({
+      address: TOKEN_ADDRESS, abi: GBLIN_CONTRACT_ABI, functionName: "basketLength",
+    }));
+  } catch { /* default 3 */ }
+  for (let idx = 0; idx < basketLen; idx++) {
+    for (const isWethToAsset of [true, false]) {
+      const amt = isWethToAsset ? 20_000_000_000_000_000n : 10n ** 18n;
+      try {
+        await publicClient.simulateContract({
+          account: wallet.address, address: TOKEN_ADDRESS, abi: GBLIN_CONTRACT_ABI,
+          functionName: "incentivizedRebalance", args: [BigInt(idx), isWethToAsset, amt],
+        });
+      } catch { continue; }
+      try {
+        const gasPrice = await getVariedGasPrice();
+        const hash = await wallet.walletClient.writeContract({
+          address: TOKEN_ADDRESS, abi: GBLIN_CONTRACT_ABI,
+          functionName: "incentivizedRebalance", args: [BigInt(idx), isWethToAsset, amt],
+          gas: 3_000_000n, gasPrice,
+        });
+        const receipt = await publicClient.waitForTransactionReceipt({ hash });
+        if (receipt.status === "success") {
+          lastRebalanceDayKey = today;
+          (state as any).shieldLastRebalanceAt = new Date().toISOString();
+          (state as any).shieldLastRebalanceTx = hash;
+          logger.info({ hash, idx, isWethToAsset }, "Daily incentivizedRebalance executed OK (also refreshed shield)");
+          return;
+        }
+      } catch (err) {
+        logger.warn({ err, idx, isWethToAsset }, "incentivizedRebalance send failed - trying next");
+      }
+    }
+  }
+}
+
+function startShieldKeeper(): void {
+  if (shieldKeeperTimer) return;
+  setTimeout(() => { pokeRefreshWeights().catch(() => {}); }, 60_000);
+  shieldKeeperTimer = setInterval(() => {
+    if (!isRunning) return;
+    pokeRefreshWeights().catch(() => {});
+    maybeDailyRebalance().catch(() => {});
+  }, SHIELD_POKE_INTERVAL_MS);
 }
 
 export function getBotState(): BotState {

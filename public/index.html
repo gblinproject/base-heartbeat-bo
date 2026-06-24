@@ -58,6 +58,11 @@
 
   <div class="wallets" id="wallets"></div>
 
+  <div class="trades" id="shield-panel" style="margin-bottom:24px">
+    <div class="trades-title">Crash-Shield Keeper · movimenti sul contratto V6</div>
+    <div id="shield-body"><div style="color:#4b5563;font-size:0.75rem">caricamento...</div></div>
+  </div>
+
   <div class="trades">
     <div class="trades-title">Ultimi trade</div>
     <div id="trade-list"><div style="color:#4b5563;font-size:0.75rem">caricamento...</div></div>
@@ -145,6 +150,27 @@
             '<div class="wallet-usd">Totale $' + totalW.toFixed(2) + '</div>' +
             '</div>';
         }).join('');
+
+        // Crash-Shield Keeper panel — on-chain movements (refreshWeights + rebalance)
+        const sh = s.shield;
+        const shEl = document.getElementById('shield-body');
+        if (sh) {
+          const txLink = (h) => h
+            ? '<a href="https://basescan.org/tx/' + h + '" target="_blank" style="color:#60a5fa;text-decoration:none">' + h.slice(0, 8) + '…' + h.slice(-6) + '</a>'
+            : '<span style="color:#374151">—</span>';
+          shEl.innerHTML =
+            '<div class="trade-row">' +
+              '<div class="trade-left"><span class="dex-badge dex-gblin">refreshWeights</span></div>' +
+              '<div class="trade-mid">' + (sh.lastRefreshAt ? 'ultimo ' + fmt(sh.lastRefreshAt) : 'in attesa · gira ogni ora') +
+                '  ·  ' + (sh.refreshCount ?? 0) + ' totali</div>' +
+              '<div class="trade-right">' + txLink(sh.lastRefreshTx) + '</div>' +
+            '</div>' +
+            '<div class="trade-row">' +
+              '<div class="trade-left"><span class="dex-badge dex-aero">rebalance</span></div>' +
+              '<div class="trade-mid">' + (sh.lastRebalanceAt ? 'ultimo ' + fmt(sh.lastRebalanceAt) : 'solo se serve · check giornaliero') + '</div>' +
+              '<div class="trade-right">' + txLink(sh.lastRebalanceTx) + '</div>' +
+            '</div>';
+        }
 
         const allTrades = s.recentTrades ?? [];
         const trades = allTrades.filter(t => t.success === true).slice(0, 10);

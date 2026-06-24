@@ -44,6 +44,13 @@ router.get("/bot/status", (_req, res) => {
     lastCheck: state.lastCheck,
     lastTrade: state.lastTrade,
     recentTrades: state.recentTrades,
+    shield: {
+      lastRefreshAt:   (state as any).shieldLastRefreshAt   ?? null,
+      lastRefreshTx:   (state as any).shieldLastRefreshTx   ?? null,
+      refreshCount:    (state as any).shieldRefreshCount    ?? 0,
+      lastRebalanceAt: (state as any).shieldLastRebalanceAt ?? null,
+      lastRebalanceTx: (state as any).shieldLastRebalanceTx ?? null,
+    },
     errorMessage: state.errorMessage,
   });
 });
