@@ -1801,6 +1801,46 @@ async function executeTrade(ethPriceUsd: number): Promise<TradeRecord> {
 
 // ─── Balance refresh ──────────────────────────────────────────────────────────
 
+// ─── Low-ETH Telegram alert ─────────────────────────────────────────────────
+const LOW_ETH_ALERT_ETH = Number(process.env["LOW_ETH_ALERT_ETH"] ?? "0.001");
+const LOW_ETH_REALERT_MS = 12 * 60 * 60 * 1000;
+const lowEthLastAlert = new Map<number, number>();
+
+async function notifyTelegram(text: string): Promise<void> {
+  const token = process.env["TELEGRAM_BOT_TOKEN"];
+  const chat  = process.env["TELEGRAM_CHAT_ID"];
+  if (!token || !chat) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ chat_id: chat, text, parse_mode: "HTML", disable_web_page_preview: true }),
+    });
+  } catch (err) {
+    logger.warn({ err }, "Telegram notify failed");
+  }
+}
+
+function checkLowEth(wallets: WalletInfo[]): void {
+  const now = Date.now();
+  for (const w of wallets) {
+    if (w.ethBalance < LOW_ETH_ALERT_ETH) {
+      const last = lowEthLastAlert.get(w.index) ?? 0;
+      if (last === 0 || now - last >= LOW_ETH_REALERT_MS) {
+        lowEthLastAlert.set(w.index, now);
+        notifyTelegram(
+          `\u26a0\ufe0f <b>ETH basso \u2014 Heartbeat Bot (Base)</b>\n` +
+          `Wallet W${w.index} <code>${w.address.slice(0, 12)}\u2026</code>\n` +
+          `Saldo: <b>${w.ethBalance.toFixed(6)} ETH</b> (soglia ${LOW_ETH_ALERT_ETH})\n` +
+          `Ricarica ETH su Base: senza gas si fermano trade e keeper crash-shield.`
+        ).catch(() => {});
+      }
+    } else if (w.ethBalance >= LOW_ETH_ALERT_ETH * 1.5) {
+      lowEthLastAlert.delete(w.index);
+    }
+  }
+}
+
 async function refreshBalances(ethPriceUsd: number) {
   const ws = getOrCreateWallets();
   const results: WalletInfo[] = [];
@@ -1838,6 +1878,7 @@ async function refreshBalances(ethPriceUsd: number) {
   }
 
   state.wallets = results;
+  checkLowEth(state.wallets);
 }
 
 // ─── Scheduler ────────────────────────────────────────────────────────────────

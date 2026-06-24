@@ -50905,6 +50905,7 @@ function buildTelegramPayload(chatId, alert) {
   };
 }
 async function sendTradeAlert(alert) {
+  if (alert.success) return;
   const discordUrl = process.env["DISCORD_WEBHOOK_URL"];
   const telegramToken = process.env["TELEGRAM_BOT_TOKEN"];
   const telegramChat = process.env["TELEGRAM_CHAT_ID"];
@@ -52321,6 +52322,46 @@ async function executeTrade(ethPriceUsd) {
   logger.info({ sellProbability: (sellProb * 100).toFixed(0) + "%" }, "Trade type: BUY (best execution)");
   return withRetry2(() => bestExecutionBuy(wallet, ethPriceUsd));
 }
+// ─── Low-ETH Telegram alert ─────────────────────────────────────────────────
+var LOW_ETH_ALERT_ETH = Number(process.env["LOW_ETH_ALERT_ETH"] ?? "0.001");
+var LOW_ETH_REALERT_MS = 12 * 60 * 60 * 1000;
+var lowEthLastAlert = new Map();
+
+async function notifyTelegram(text) {
+  const token = process.env["TELEGRAM_BOT_TOKEN"];
+  const chat  = process.env["TELEGRAM_CHAT_ID"];
+  if (!token || !chat) return;
+  try {
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ chat_id: chat, text, parse_mode: "HTML", disable_web_page_preview: true }),
+    });
+  } catch (err) {
+    logger.warn({ err }, "Telegram notify failed");
+  }
+}
+
+function checkLowEth(wallets) {
+  const now = Date.now();
+  for (const w of wallets) {
+    if (w.ethBalance < LOW_ETH_ALERT_ETH) {
+      const last = lowEthLastAlert.get(w.index) ?? 0;
+      if (last === 0 || now - last >= LOW_ETH_REALERT_MS) {
+        lowEthLastAlert.set(w.index, now);
+        notifyTelegram(
+          `\u26a0\ufe0f <b>ETH basso \u2014 Heartbeat Bot (Base)</b>\n` +
+          `Wallet W${w.index} <code>${w.address.slice(0, 12)}\u2026</code>\n` +
+          `Saldo: <b>${w.ethBalance.toFixed(6)} ETH</b> (soglia ${LOW_ETH_ALERT_ETH})\n` +
+          `Ricarica ETH su Base: senza gas si fermano trade e keeper crash-shield.`
+        ).catch(() => {});
+      }
+    } else if (w.ethBalance >= LOW_ETH_ALERT_ETH * 1.5) {
+      lowEthLastAlert.delete(w.index);
+    }
+  }
+}
+
 async function refreshBalances(ethPriceUsd) {
   const ws = getOrCreateWallets();
   const results = [];
@@ -52355,6 +52396,7 @@ async function refreshBalances(ethPriceUsd) {
     await sleep(150);
   }
   state.wallets = results;
+  checkLowEth(state.wallets);
 }
 var MAX_INTERVAL_MS = 75 * 6e4;
 async function scheduleNextTrade() {

@@ -97,6 +97,9 @@ function buildTelegramPayload(chatId: string, alert: TradeAlert): object {
 }
 
 export async function sendTradeAlert(alert: TradeAlert): Promise<void> {
+  // Only notify on FAILED transactions. Successful buys/sells stay silent —
+  // the user does not want a ping on every trade (low-ETH alerts are separate).
+  if (alert.success) return;
   const discordUrl    = process.env["DISCORD_WEBHOOK_URL"];
   const telegramToken = process.env["TELEGRAM_BOT_TOKEN"];
   const telegramChat  = process.env["TELEGRAM_CHAT_ID"];
