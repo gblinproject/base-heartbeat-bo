@@ -51100,6 +51100,13 @@ var AERO_AMOUNTS_ABI = [
 ];
 var GBLIN_CONTRACT_ABI = [
   {
+    name: "lastVolRefresh",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }]
+  },
+  {
     name: "refreshWeights",
     type: "function",
     stateMutability: "nonpayable",
@@ -52536,6 +52543,16 @@ async function pokeRefreshWeights() {
   if (!isRunning) return;
   const wallet = selectBestFundedWallet();
   if (!wallet) return;
+  try {
+    const lastVolRefresh = await publicClient.readContract({
+      address: TOKEN_ADDRESS, abi: GBLIN_CONTRACT_ABI, functionName: "lastVolRefresh"
+    });
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+    if (lastVolRefresh > 0n && nowSec - lastVolRefresh < 3300n) {
+      logger.info({ lastVolRefresh: lastVolRefresh.toString() }, "Crash-shield already fresh (<55m) - skipping poke");
+      return;
+    }
+  } catch {}
   try {
     const gasPrice = await getVariedGasPrice();
     const hash = await wallet.walletClient.writeContract({

@@ -270,6 +270,13 @@ const GBLIN_CONTRACT_ABI = [
   },
   // Crash-shield keeper surface
   {
+    name: "lastVolRefresh",
+    type: "function",
+    stateMutability: "view",
+    inputs:  [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
     name: "refreshWeights",
     type: "function",
     stateMutability: "nonpayable",
@@ -2095,6 +2102,16 @@ async function pokeRefreshWeights(): Promise<void> {
   const wallet = selectBestFundedWallet();
   if (!wallet) return;
   try {
+    const lastVolRefresh = await publicClient.readContract({
+      address: TOKEN_ADDRESS, abi: GBLIN_CONTRACT_ABI, functionName: "lastVolRefresh",
+    }) as bigint;
+    const nowSec = BigInt(Math.floor(Date.now() / 1000));
+    if (lastVolRefresh > 0n && nowSec - lastVolRefresh < 3300n) {
+      logger.info({ lastVolRefresh: lastVolRefresh.toString() }, "Crash-shield already fresh (<55m) - skipping poke");
+      return;
+    }
+  } catch { /* read failed - proceed with poke */ }
+  try {
     const gasPrice = await getVariedGasPrice();
     const hash = await wallet.walletClient.writeContract({
       address:      TOKEN_ADDRESS,
@@ -2184,176 +2201,4 @@ function startShieldKeeper(): void {
   }, SHIELD_POKE_INTERVAL_MS);
 }
 
-export function getBotState(): BotState {
-  return { ...state };
-}
-
-function _recordTrade(record: TradeRecord, type: "buy" | "sell") {
-  if (record.success) state.lastTrade = record;
-  state.totalTrades += 1;
-  if (type === "buy")  state.totalBuys  += 1;
-  else                 state.totalSells += 1;
-  state.recentTrades = [record, ...state.recentTrades].slice(0, 200);
-  persistTrades();
-  refreshBalances(state.ethPriceUsd).catch(() => {});
-}
-
-export function triggerBuyNow(): void {
-  if (!isRunning) return;
-  logger.info("Manual BUY triggered (best execution)");
-  getEthPriceUsd().then((p) => {
-    state.ethPriceUsd = p;
-    return bestExecutionBuy(selectBestFundedWallet(), p, true);
-  }).then((r) => _recordTrade(r, "buy"))
-    .catch((err) => logger.error({ err }, "Manual BUY failed"));
-}
-
-export function triggerSellNow(): void {
-  if (!isRunning) return;
-  logger.info("Manual SELL triggered (best execution)");
-  getEthPriceUsd().then((p) => {
-    state.ethPriceUsd = p;
-    return bestExecutionSell(selectBestFundedWallet(), p, true);
-  }).then((r) => _recordTrade(r, "sell"))
-    .catch((err) => logger.error({ err }, "Manual SELL failed"));
-}
-
-export function triggerBuyUniswap(): void {
-  if (!isRunning) return;
-  logger.info("Manual BUY forced → Uniswap V3");
-  getEthPriceUsd().then((p) => {
-    state.ethPriceUsd = p;
-    return executeBuy(selectBestFundedWallet(), p, true);
-  }).then((r) => _recordTrade(r, "buy"))
-    .catch((err) => logger.error({ err }, "Manual BUY Uniswap failed"));
-}
-
-export function triggerBuyAerodrome(): void {
-  if (!isRunning) return;
-  logger.info("Manual BUY forced → Aerodrome V1");
-  getEthPriceUsd().then((p) => {
-    state.ethPriceUsd = p;
-    return executeBuyAerodrome(selectBestFundedWallet(), p, true);
-  }).then((r) => _recordTrade(r, "buy"))
-    .catch((err) => logger.error({ err }, "Manual BUY Aerodrome failed"));
-}
-
-export function triggerSellUniswap(): void {
-  if (!isRunning) return;
-  logger.info("Manual SELL forced → Uniswap V3");
-  getEthPriceUsd().then((p) => {
-    state.ethPriceUsd = p;
-    return executeSell(selectBestFundedWallet(), p, true);
-  }).then((r) => _recordTrade(r, "sell"))
-    .catch((err) => logger.error({ err }, "Manual SELL Uniswap failed"));
-}
-
-export function triggerSellAerodrome(): void {
-  if (!isRunning) return;
-  logger.info("Manual SELL forced → Aerodrome V1");
-  getEthPriceUsd().then((p) => {
-    state.ethPriceUsd = p;
-    return executeSellAerodrome(selectBestFundedWallet(), p, true);
-  }).then((r) => _recordTrade(r, "sell"))
-    .catch((err) => logger.error({ err }, "Manual SELL Aerodrome failed"));
-}
-
-export function triggerBuyGblinContract(): void {
-  if (!isRunning) return;
-  logger.info("Manual BUY forced → GBLIN contract");
-  getEthPriceUsd().then(async (p) => {
-    state.ethPriceUsd = p;
-    const wallet    = selectBestFundedWallet();
-    const usdAmount = selectBuyAmountUsd();
-    const ethAmount = usdAmount / p;
-    const ethWei    = parseEther(ethAmount.toFixed(18));
-    return executeBuyGblinContract(wallet, p, ethWei, usdAmount, true);
-  }).then((r) => _recordTrade(r, "buy"))
-    .catch((err) => logger.error({ err }, "Manual BUY GBLIN contract failed"));
-}
-
-export function triggerSellGblinContract(): void {
-  if (!isRunning) return;
-  logger.info("Manual SELL forced → GBLIN contract");
-  getEthPriceUsd().then(async (p) => {
-    state.ethPriceUsd = p;
-    // For the sell test pick the wallet with the most GBLIN tokens
-    const ws = getOrCreateWallets();
-    const balances = await Promise.all(ws.map(w => getTokenBalance(w.address).then(b => ({ w, raw: b.raw }))));
-    const best = balances.reduce((a, b) => b.raw > a.raw ? b : a, balances[0]!);
-    const wallet = best.w;
-    if (best.raw === 0n) throw new Error("No token balance in any wallet");
-    const sellPct    = randomBetween(SELL_PCT_MIN, SELL_PCT_MAX);
-    const sellAmount = (best.raw * BigInt(Math.floor(sellPct * 10000))) / 10000n;
-    logger.info({ wallet: wallet.address, tokens: formatUnits(best.raw, TOKEN_DECIMALS) }, "SELL GBLIN test — wallet selected by token balance");
-    return executeSellGblinContract(wallet, p, sellAmount, true);
-  }).then((r) => _recordTrade(r, "sell"))
-    .catch((err) => logger.error({ err }, "Manual SELL GBLIN contract failed"));
-}
-
-// ─── Metrics ──────────────────────────────────────────────────────────────────
-
-export function getMetrics() {
-  const trades = state.recentTrades;
-
-  // Uptime
-  const uptimeSec = botStartedAt ? Math.round((Date.now() - botStartedAt) / 1000) : 0;
-  const uptimeHuman = uptimeSec < 60
-    ? `${uptimeSec}s`
-    : uptimeSec < 3600
-    ? `${Math.floor(uptimeSec / 60)}m ${uptimeSec % 60}s`
-    : `${Math.floor(uptimeSec / 3600)}h ${Math.floor((uptimeSec % 3600) / 60)}m`;
-
-  // Success rate
-  const successful = trades.filter((t) => t.success).length;
-  const successRate = trades.length > 0 ? ((successful / trades.length) * 100).toFixed(1) + "%" : "N/A";
-
-  // Buy stats
-  const buys  = trades.filter((t) => t.type === "buy"  && t.success);
-  const sells = trades.filter((t) => t.type === "sell" && t.success);
-  const avgBuyUsd  = buys.length  > 0 ? (buys.reduce((s, t)  => s + t.usdAmount, 0) / buys.length).toFixed(4)  : "N/A";
-  const avgSellUsd = sells.length > 0 ? (sells.reduce((s, t) => s + t.usdAmount, 0) / sells.length).toFixed(4) : "N/A";
-
-  // Per-wallet breakdown
-  const walletStats = Array.from({ length: 4 }, (_, i) => {
-    const wb = trades.filter((t) => t.walletIndex === i);
-    return {
-      walletIndex:    i,
-      address:        state.wallets.find((w) => w.index === i)?.address ?? "",
-      totalTrades:    wb.length,
-      buys:           wb.filter((t) => t.type === "buy").length,
-      sells:          wb.filter((t) => t.type === "sell").length,
-      successfulTrades: wb.filter((t) => t.success).length,
-      consecutiveBuys: consecutiveBuys.get(i) ?? 0,
-      inSellCooldown: (Date.now() - (lastSellTimestamp.get(i) ?? 0)) < SELL_COOLDOWN_MS,
-    };
-  });
-
-  // Volume
-  const totalVolumeBuyUsd  = buys.reduce((s, t)  => s + t.usdAmount, 0);
-  const totalVolumeSellUsd = sells.reduce((s, t) => s + t.usdAmount, 0);
-
-  return {
-    uptime:    uptimeHuman,
-    uptimeSec,
-    startedAt: botStartedAt ? new Date(botStartedAt).toISOString() : null,
-    status:    state.status,
-    ethPriceUsd: state.ethPriceUsd,
-
-    summary: {
-      totalTrades:         state.totalTrades,
-      totalBuys:           state.totalBuys,
-      totalSells:          state.totalSells,
-      successRate,
-      avgBuyUsd,
-      avgSellUsd,
-      totalVolumeBuyUsd:  totalVolumeBuyUsd.toFixed(4),
-      totalVolumeSellUsd: totalVolumeSellUsd.toFixed(4),
-    },
-
-    rebalance: {
-      thresholdRange: "2–6 per wallet (random, re-rolled after each sell)",
-      walletCounters: Array.from({ length: 4 }, (_, i) => ({
-        walletIndex:      i,
-        consecutiveBuys:  consecutiveBuys.get(i) ?? 0,
-        currentThreshold: getRebalanc
+export functio
