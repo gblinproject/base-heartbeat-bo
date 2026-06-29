@@ -1612,6 +1612,18 @@ async function bestExecutionBuy(
     }
   }
 
+  // ── Daily forced GBLIN-contract buy (independent of pool price) ────────────
+  // The contract MINTS at NAV; the pools often trade GBLIN below NAV, so plain
+  // best-execution would essentially never route here. Force exactly one direct
+  // contract buy per day, at the randomized unlock slot, so on-chain `Minted`
+  // activity never stalls (keeps the "contract (buy)" stream alive).
+  if (isGblinContractBuyAllowed() && ethWei >= GBLIN_MIN_ETH_WEI) {
+    logger.info("Daily forced-buy: GBLIN contract (NAV mint) — keeping direct on-chain buys alive");
+    const forced = await executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, manual);
+    if (forced.success) return forced;
+    logger.warn("Forced GBLIN-contract buy failed — falling through to best-execution (slot stays open for retry today)");
+  }
+
   // ── Normal best-execution routing ───────────────────────────────────────────
   const gblinAllowed = isGblinContractBuyAllowed();
   const best = await findBestBuyVenue(ethWei, !gblinAllowed).catch(() => null);
