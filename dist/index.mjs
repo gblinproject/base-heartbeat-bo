@@ -50957,7 +50957,7 @@ var AERO_POOL = "0x6Ac18D5e90278D2477027B5769EFb2fF0711FFbB";
 var SELL_PROBABILITY_BASE = 0.4;
 var SELL_PCT_MIN = 0.15;
 var SELL_PCT_MAX = 0.85;
-var FUNDED_THRESHOLD_USD = 10;
+var FUNDED_THRESHOLD_USD = Number(process.env["FUNDED_THRESHOLD_USD"] ?? "10");
 var POLLING_INTERVAL_MS = 60 * 1e3;
 var SELL_COOLDOWN_MS = 45 * 60 * 1e3;
 var GBLIN_MIN_ETH_WEI = parseEther("0.0005");
@@ -51481,11 +51481,36 @@ async function getGblinPriceUsd() {
     const data = await res.json();
     const pairs = (data?.pairs ?? []).filter((p) => p.priceUsd && Number(p.priceUsd) > 0).sort((a, b) => (b.liquidity?.usd ?? 0) - (a.liquidity?.usd ?? 0));
     const price = pairs[0]?.priceUsd ? parseFloat(pairs[0].priceUsd) : 0;
-    if (price > 0) state.gblinPriceUsd = price;
-    return price || state.gblinPriceUsd || 0;
+    if (price > 0) {
+      state.gblinPriceUsd = price;
+      return price;
+    }
   } catch {
-    return state.gblinPriceUsd || 0;
   }
+  const ethUsd = state.ethPriceUsd || 0;
+  if (ethUsd > 0) {
+    try {
+      const navWeth = await quoteGblinContractSell(10n ** 18n);
+      const navPrice = parseFloat(formatUnits(navWeth, 18)) * ethUsd;
+      if (navPrice > 0) {
+        logger.info({ price: navPrice.toFixed(2), source: "contract NAV" }, "DexScreener unavailable – GBLIN price from on-chain NAV");
+        state.gblinPriceUsd = navPrice;
+        return navPrice;
+      }
+    } catch {
+    }
+    try {
+      const spotWeth = await quoteUniSell(10n ** 18n);
+      const spotPrice = parseFloat(formatUnits(spotWeth, 18)) * ethUsd;
+      if (spotPrice > 0) {
+        logger.info({ price: spotPrice.toFixed(2), source: "Uniswap V3 spot" }, "DexScreener unavailable – GBLIN price from on-chain spot");
+        state.gblinPriceUsd = spotPrice;
+        return spotPrice;
+      }
+    } catch {
+    }
+  }
+  return state.gblinPriceUsd || 0;
 }
 var TOKEN_DECIMALS = 18;
 async function getTokenBalance(address) {
@@ -52462,7 +52487,8 @@ function checkLowEth(wallets) {
 async function refreshBalances(ethPriceUsd) {
   const ws = getOrCreateWallets();
   const results = [];
-  getGblinPriceUsd().catch(() => {
+  if (state.ethPriceUsd === 0 && ethPriceUsd > 0) state.ethPriceUsd = ethPriceUsd;
+  await getGblinPriceUsd().catch(() => {
   });
   for (const w of ws) {
     try {
