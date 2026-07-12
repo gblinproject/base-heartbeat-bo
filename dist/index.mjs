@@ -52655,20 +52655,83 @@ async function startBot() {
 var SHIELD_POKE_INTERVAL_MS = 60 * 60 * 1000;
 var shieldKeeperTimer = null;
 var lastRebalanceDayKey = "";
+var SHIELD_MOVE_TRIGGER_PCT = Number(process.env["SHIELD_MOVE_TRIGGER_PCT"] ?? "5");
+var SHIELD_MAX_STALENESS_SEC = Number(process.env["SHIELD_MAX_STALENESS_SEC"] ?? String(24 * 3600));
+var CHAINLINK_AGG_ABI = [{
+  name: "latestRoundData",
+  type: "function",
+  stateMutability: "view",
+  inputs: [],
+  outputs: [
+    { name: "roundId", type: "uint80" },
+    { name: "answer", type: "int256" },
+    { name: "startedAt", type: "uint256" },
+    { name: "updatedAt", type: "uint256" },
+    { name: "answeredInRound", type: "uint80" }
+  ]
+}];
+var SHIELD_WATCH_FEEDS = [
+  { label: "ETH/USD", address: "0x71041dddad3595F9CEd3DcCFBe3D1F4b0a16Bb70" },
+  { label: "cbBTC/USD", address: "0x07DA0E54543a844a80ABE69c8A12F22B3aA59f9D" }
+];
+var shieldPriceSnapshot = new Map();
+async function readShieldFeeds() {
+  const out = [];
+  for (const f of SHIELD_WATCH_FEEDS) {
+    const data = await publicClient.readContract({
+      address: f.address, abi: CHAINLINK_AGG_ABI, functionName: "latestRoundData"
+    });
+    out.push({ label: f.label, price: Number(data[1]) });
+  }
+  return out;
+}
 async function pokeRefreshWeights() {
   if (!isRunning) return;
   const wallet = selectBestFundedWallet();
   if (!wallet) return;
+  let stalenessSec = Number.MAX_SAFE_INTEGER;
+  let gateFeeds = null;
   try {
     const lastVolRefresh = await publicClient.readContract({
       address: TOKEN_ADDRESS, abi: GBLIN_CONTRACT_ABI, functionName: "lastVolRefresh"
     });
     const nowSec = BigInt(Math.floor(Date.now() / 1000));
+    if (lastVolRefresh > 0n) stalenessSec = Number(nowSec - lastVolRefresh);
     if (lastVolRefresh > 0n && nowSec - lastVolRefresh < 3300n) {
       logger.info({ lastVolRefresh: lastVolRefresh.toString() }, "Crash-shield already fresh (<55m) - skipping poke");
       return;
     }
   } catch {}
+  try {
+    gateFeeds = await readShieldFeeds();
+    let maxMovePct = 0;
+    const moves = [];
+    for (const f of gateFeeds) {
+      const prev = shieldPriceSnapshot.get(f.label);
+      if (prev && prev > 0) {
+        const movePct = Math.abs(f.price / prev - 1) * 100;
+        moves.push(`${f.label}: ${movePct.toFixed(2)}%`);
+        if (movePct > maxMovePct) maxMovePct = movePct;
+      } else {
+        shieldPriceSnapshot.set(f.label, f.price);
+      }
+    }
+    const isStale = stalenessSec >= SHIELD_MAX_STALENESS_SEC;
+    if (maxMovePct < SHIELD_MOVE_TRIGGER_PCT && !isStale) {
+      logger.info(
+        { moves: moves.join(", ") || "first-sample", trigger: SHIELD_MOVE_TRIGGER_PCT + "%", stalenessH: stalenessSec === Number.MAX_SAFE_INTEGER ? "?" : (stalenessSec / 3600).toFixed(1) },
+        "Shield keeper: prices stable & weights fresh - skipping on-chain poke (gas saved)"
+      );
+      return;
+    }
+    logger.info(
+      { moves: moves.join(", ") || "first-sample", maxMovePct: maxMovePct.toFixed(2) + "%", stale: isStale },
+      "Shield keeper: trigger hit - sending refreshWeights()"
+    );
+  } catch (err) {
+    logger.warn({ err }, "Shield keeper: oracle read failed - falling back to staleness-only policy");
+    if (stalenessSec < SHIELD_MAX_STALENESS_SEC) return;
+  }
   try {
     const gasPrice = await getVariedGasPrice();
     const hash = await wallet.walletClient.writeContract({
@@ -52684,7 +52747,8 @@ async function pokeRefreshWeights() {
       state.shieldLastRefreshAt = new Date().toISOString();
       state.shieldLastRefreshTx = hash;
       state.shieldRefreshCount = (state.shieldRefreshCount || 0) + 1;
-      logger.info({ hash, wallet: wallet.address }, "Crash-shield refreshWeights() poked OK");
+      if (gateFeeds) for (const f of gateFeeds) shieldPriceSnapshot.set(f.label, f.price);
+      logger.info({ hash, wallet: wallet.address, gasUsed: receipt.gasUsed?.toString() }, "Crash-shield refreshWeights() poked OK");
     } else {
       logger.warn({ hash }, "refreshWeights() reverted on-chain");
     }
