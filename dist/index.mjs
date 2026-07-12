@@ -52255,8 +52255,85 @@ async function withRetry2(fn, maxAttempts = 3) {
   }
   return lastRecord;
 }
+var RESCUE_DONOR_DUST = 6e-5;
+var RESCUE_RETRY_MS = 30 * 60 * 1e3;
+var lastGasRescueAt = 0;
+function rescueDeadlockLikely(minBuyEthNeeded) {
+  if (state.wallets.length === 0) return false;
+  const canSellCached = state.wallets.some(
+    (sw) => sw.ethBalance >= MIN_ETH_FOR_SELL && parseFloat(sw.tokenBalance ?? "0") > 0
+  );
+  const canBuyCached = state.wallets.some((sw) => sw.ethBalance >= minBuyEthNeeded);
+  return !canSellCached && !canBuyCached;
+}
+async function rescueConsolidateGas(ethPriceUsd) {
+  const minBuyEthNeeded = Math.min(...BUY_PRESETS.map((p) => p.amount)) / ethPriceUsd + ETH_RESERVE;
+  if (!rescueDeadlockLikely(minBuyEthNeeded)) return null;
+  if (Date.now() - lastGasRescueAt < RESCUE_RETRY_MS) return null;
+  const ws = getOrCreateWallets();
+  const infos = [];
+  for (const w of ws) {
+    try {
+      const eth = await getEthBalance(w.address);
+      await sleep(100);
+      const tok = await getTokenBalance(w.address);
+      infos.push({ w, eth, tok: parseFloat(tok.human) });
+    } catch (err) {
+      logger.warn({ err, wallet: w.address }, "Rescue: balance read failed – skipping rescue this cycle");
+      return null;
+    }
+    await sleep(100);
+  }
+  const canSell = infos.some((x) => x.eth >= MIN_ETH_FOR_SELL && x.tok > 0);
+  const canBuy = infos.some((x) => x.eth >= minBuyEthNeeded);
+  if (canSell || canBuy) return null;
+  lastGasRescueAt = Date.now();
+  const holders = infos.filter((x) => x.tok > 0);
+  if (holders.length === 0) {
+    logger.warn("\u{1F198} Gas deadlock: no wallet holds GBLIN either – manual ETH top-up required to resume trading");
+    return null;
+  }
+  const target = holders.reduce((a, b) => b.tok > a.tok ? b : a, holders[0]);
+  const donors = infos.filter((x) => x.w.index !== target.w.index && x.eth > RESCUE_DONOR_DUST * 2);
+  const projected = target.eth + donors.reduce((s, d) => s + (d.eth - RESCUE_DONOR_DUST), 0);
+  if (projected < MIN_ETH_FOR_SELL) {
+    logger.warn(
+      { projectedEth: projected.toFixed(6), need: MIN_ETH_FOR_SELL },
+      "\u{1F198} Gas deadlock: combined ETH too low even after consolidation – manual ETH top-up required"
+    );
+    return null;
+  }
+  logger.warn(
+    { target: `W${target.w.index}`, donors: donors.map((d) => `W${d.w.index}`).join(",") || "none", projectedEth: projected.toFixed(6) },
+    "\u{1F198} Gas deadlock detected – consolidating ETH on the GBLIN-richest wallet to unlock a sell"
+  );
+  for (const d of donors) {
+    const send = d.eth - RESCUE_DONOR_DUST;
+    if (send <= 0) continue;
+    try {
+      const hash3 = await d.w.walletClient.sendTransaction({
+        to: target.w.address,
+        value: parseEther(send.toFixed(18))
+      });
+      await publicClient.waitForTransactionReceipt({ hash: hash3 });
+      logger.info({ from: `W${d.w.index}`, to: `W${target.w.index}`, amount: send.toFixed(6) }, "Rescue transfer confirmed ✅");
+    } catch (err) {
+      logger.warn({ err, from: `W${d.w.index}` }, "Rescue transfer failed – continuing with remaining donors");
+    }
+    await sleep(300);
+  }
+  const finalEth = await getEthBalance(target.w.address);
+  if (finalEth < MIN_ETH_FOR_SELL) {
+    logger.warn({ finalEth: finalEth.toFixed(6), need: MIN_ETH_FOR_SELL }, "Rescue consolidation insufficient – manual ETH top-up required");
+    return null;
+  }
+  logger.info({ wallet: `W${target.w.index}`, ethBalance: finalEth.toFixed(6) }, "Rescue: forcing SELL to replenish operating ETH");
+  return withRetry2(() => bestExecutionSell(target.w, ethPriceUsd, true));
+}
 async function executeTrade(ethPriceUsd) {
   const wallets2 = getOrCreateWallets();
+  const rescueRecord = await rescueConsolidateGas(ethPriceUsd);
+  if (rescueRecord) return rescueRecord;
   if (Math.random() < 0.12) {
     logger.info("Skipping trade this cycle (human-like hesitation)");
     return {
@@ -52324,7 +52401,20 @@ async function executeTrade(ethPriceUsd) {
     }
     logger.info("No sellable inventory (or all in cooldown) \u2013 falling back to BUY (best-execution will mint at NAV on the contract)");
   }
-  const walletIdx = selectWalletIndex();
+  let walletIdx = selectWalletIndex();
+  const minBuyEthNeeded = Math.min(...BUY_PRESETS.map((p) => p.amount)) / ethPriceUsd + ETH_RESERVE;
+  const cachedEthOf = (idx) => state.wallets.find((sw) => sw.index === idx)?.ethBalance ?? 0;
+  if (state.wallets.length > 0 && cachedEthOf(walletIdx) < minBuyEthNeeded) {
+    const affordable = wallets2.filter((w) => cachedEthOf(w.index) >= minBuyEthNeeded);
+    if (affordable.length > 0) {
+      const richest = affordable.reduce((a, b) => cachedEthOf(b.index) > cachedEthOf(a.index) ? b : a, affordable[0]);
+      logger.info(
+        { from: `W${walletIdx}`, to: `W${richest.index}` },
+        "Selected wallet cannot afford min buy – re-picking richest affordable wallet"
+      );
+      walletIdx = richest.index;
+    }
+  }
   const wallet = wallets2[walletIdx];
   logger.info({ sellProbability: (sellProb * 100).toFixed(0) + "%" }, "Trade type: BUY (best execution)");
   return withRetry2(() => bestExecutionBuy(wallet, ethPriceUsd));
