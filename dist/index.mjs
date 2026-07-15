@@ -51513,12 +51513,13 @@ async function getGblinPriceUsd() {
   return state.gblinPriceUsd || 0;
 }
 var TOKEN_DECIMALS = 18;
-async function getTokenBalance(address) {
+async function getTokenBalance(address, blockNumber) {
   const raw = await publicClient.readContract({
     address: TOKEN_ADDRESS,
     abi: ERC20_ABI,
     functionName: "balanceOf",
-    args: [address]
+    args: [address],
+    ...(blockNumber !== undefined ? { blockNumber } : {})
   });
   return { raw, human: formatUnits(raw, TOKEN_DECIMALS) };
 }
@@ -51697,13 +51698,13 @@ async function executeBuy(wallet, ethPriceUsd, manual = false, ethWeiIn, usdAmou
       value: ethWei,
       gasPrice
     });
-    const tokBefore = await getTokenBalance(wallet.address);
     const receipt = await publicClient.waitForTransactionReceipt({ hash: hash3 });
     if (receipt.status !== "success") {
       record.txHash = hash3;
       throw new Error(`swap reverted on-chain (${hash3})`);
     }
-    const tokAfter = await getTokenBalance(wallet.address);
+    const tokBefore = await getTokenBalance(wallet.address, receipt.blockNumber - 1n);
+    const tokAfter = await getTokenBalance(wallet.address, receipt.blockNumber);
     record.txHash = hash3;
     record.tokenAmount = formatUnits(
       tokAfter.raw > tokBefore.raw ? tokAfter.raw - tokBefore.raw : 0n,
@@ -51764,13 +51765,13 @@ async function executeBuyAerodrome(wallet, ethPriceUsd, manual = false, ethWeiIn
       value: ethWei,
       gasPrice
     });
-    const tokBefore = await getTokenBalance(wallet.address);
     const receipt = await publicClient.waitForTransactionReceipt({ hash: hash3 });
     if (receipt.status !== "success") {
       record.txHash = hash3;
       throw new Error(`swap reverted on-chain (${hash3})`);
     }
-    const tokAfter = await getTokenBalance(wallet.address);
+    const tokBefore = await getTokenBalance(wallet.address, receipt.blockNumber - 1n);
+    const tokAfter = await getTokenBalance(wallet.address, receipt.blockNumber);
     record.txHash = hash3;
     record.tokenAmount = formatUnits(
       tokAfter.raw > tokBefore.raw ? tokAfter.raw - tokBefore.raw : 0n,
@@ -51868,7 +51869,7 @@ async function executeSellAerodrome(wallet, ethPriceUsd, manual = false, sellAmo
       record.txHash = swapHash;
       throw new Error(`swapExactTokensForETH reverted on-chain (${swapHash})`);
     }
-    const ethAfterSwap = await publicClient.getBalance({ address: wallet.address });
+    const ethAfterSwap = await publicClient.getBalance({ address: wallet.address, blockNumber: swapReceipt.blockNumber });
     const gasCostWei = swapReceipt.gasUsed * (swapReceipt.effectiveGasPrice ?? swapGasPrice);
     const ethReceivedWei = ethAfterSwap + gasCostWei > ethBeforeSwap ? ethAfterSwap + gasCostWei - ethBeforeSwap : 0n;
     const ethReceived = Number(ethReceivedWei) / 1e18;
@@ -51992,7 +51993,7 @@ async function executeSell(wallet, ethPriceUsd, manual = false, sellAmountIn) {
       record.txHash = swapHash;
       throw new Error(`multicall swap reverted on-chain (${swapHash})`);
     }
-    const ethAfterSwap = await publicClient.getBalance({ address: wallet.address });
+    const ethAfterSwap = await publicClient.getBalance({ address: wallet.address, blockNumber: swapReceipt.blockNumber });
     const gasCostWei = swapReceipt.gasUsed * (swapReceipt.effectiveGasPrice ?? swapGasPrice);
     const ethReceivedWei = ethAfterSwap + gasCostWei > ethBeforeSwap ? ethAfterSwap + gasCostWei - ethBeforeSwap : 0n;
     const ethReceived = Number(ethReceivedWei) / 1e18;
@@ -52046,7 +52047,6 @@ async function executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, m
       // V6 buyGBLIN does internal basket swaps (cbBTC/USDC) — needs ample gas
       gasPrice
     });
-    const tokBefore = await getTokenBalance(wallet.address);
     const buyReceipt = await publicClient.waitForTransactionReceipt({ hash: hash3 });
     record.txHash = hash3;
     if (buyReceipt.status !== "success") {
@@ -52055,7 +52055,8 @@ async function executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, m
       sendTradeAlert(record).catch(() => {});
       return record;
     }
-    const tokAfter = await getTokenBalance(wallet.address);
+    const tokBefore = await getTokenBalance(wallet.address, receipt.blockNumber - 1n);
+    const tokAfter = await getTokenBalance(wallet.address, receipt.blockNumber);
     record.tokenAmount = formatUnits(
       tokAfter.raw > tokBefore.raw ? tokAfter.raw - tokBefore.raw : 0n,
       TOKEN_DECIMALS
@@ -52117,7 +52118,7 @@ async function executeSellGblinContract(wallet, ethPriceUsd, sellAmount, manual 
       record.txHash = swapHash;
       throw new Error(`sellGBLINForEth reverted on-chain (${swapHash})`);
     }
-    const ethAfterSwap = await publicClient.getBalance({ address: wallet.address });
+    const ethAfterSwap = await publicClient.getBalance({ address: wallet.address, blockNumber: swapReceipt.blockNumber });
     const gasCostWei = swapReceipt.gasUsed * (swapReceipt.effectiveGasPrice ?? swapGasPrice);
     const ethReceivedWei = ethAfterSwap + gasCostWei > ethBeforeSwap ? ethAfterSwap + gasCostWei - ethBeforeSwap : 0n;
     const ethReceived = Number(ethReceivedWei) / 1e18;
