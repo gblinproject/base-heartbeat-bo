@@ -72,10 +72,14 @@ const WALLET_WEIGHTS = [0.35, 0.30, 0.20, 0.15];
 
 /**
  * Minimum ETH a wallet must hold to participate in a sell.
- * A sell costs ~2 TXs (transfer + execute), so we need more gas headroom.
- * ~0.0005 ETH ≈ $1.50 at $3000 ETH — enough for both TXs on Base.
+ * A sell costs ~2 TXs (approve + swap): on Base that is ~0.000002–0.00001 ETH,
+ * so 0.00005 ETH (~$0.10) still leaves 5–25× headroom over the real cost.
+ * (Was 0.0005 — that starved sells whenever wallets ran low on ETH.)
  */
-const MIN_ETH_FOR_SELL = 0.0005;
+const MIN_ETH_FOR_SELL = 0.00005;
+
+/** ETH kept untouched in a wallet when sizing a buy (gas reserve). */
+const ETH_RESERVE = 0.0004;
 
 // ─── ABIs ─────────────────────────────────────────────────────────────────────
 
@@ -1042,9 +1046,9 @@ async function executeBuy(
   };
 
   const ethBalance = await getEthBalance(wallet.address);
-  if (ethBalance < ethAmount + 0.0001) {
-    record.error = `Low ETH balance: ${ethBalance.toFixed(6)} ETH`;
-    logger.warn({ wallet: wallet.address, balance: ethBalance }, "Skipping buy – low ETH");
+  if (ethBalance < ethAmount + ETH_RESERVE) {
+    record.error = `Low ETH balance: ${ethBalance.toFixed(6)} ETH (reserve: ${ETH_RESERVE})`;
+    logger.warn({ wallet: wallet.address, balance: ethBalance, reserve: ETH_RESERVE }, "Skipping buy – would breach ETH reserve");
     return record;
   }
 
@@ -1074,7 +1078,11 @@ async function executeBuy(
       gasPrice,
     });
     const tokBefore = await getTokenBalance(wallet.address);
-    await publicClient.waitForTransactionReceipt({ hash });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    if (receipt.status !== "success") {
+      record.txHash = hash;
+      throw new Error(`swap reverted on-chain (${hash})`);
+    }
     const tokAfter  = await getTokenBalance(wallet.address);
     record.txHash      = hash;
     record.tokenAmount = formatUnits(
@@ -1128,8 +1136,8 @@ async function executeBuyAerodrome(
   };
 
   const ethBalance = await getEthBalance(wallet.address);
-  if (ethBalance < ethAmount + 0.0001) {
-    record.error = `Low ETH balance: ${ethBalance.toFixed(6)} ETH`;
+  if (ethBalance < ethAmount + ETH_RESERVE) {
+    record.error = `Low ETH balance: ${ethBalance.toFixed(6)} ETH (reserve: ${ETH_RESERVE})`;
     return record;
   }
 
@@ -1151,7 +1159,11 @@ async function executeBuyAerodrome(
       gasPrice,
     });
     const tokBefore = await getTokenBalance(wallet.address);
-    await publicClient.waitForTransactionReceipt({ hash });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    if (receipt.status !== "success") {
+      record.txHash = hash;
+      throw new Error(`swap reverted on-chain (${hash})`);
+    }
     const tokAfter  = await getTokenBalance(wallet.address);
     record.txHash      = hash;
     record.tokenAmount = formatUnits(
@@ -1254,6 +1266,10 @@ async function executeSellAerodrome(
       gasPrice: swapGasPrice,
     });
     const swapReceipt   = await publicClient.waitForTransactionReceipt({ hash: swapHash });
+    if (swapReceipt.status !== "success") {
+      record.txHash = swapHash;
+      throw new Error(`swapExactTokensForETH reverted on-chain (${swapHash})`);
+    }
     const ethAfterSwap  = await publicClient.getBalance({ address: wallet.address });
     const gasCostWei    = swapReceipt.gasUsed * (swapReceipt.effectiveGasPrice ?? swapGasPrice);
     const ethReceivedWei = ethAfterSwap + gasCostWei > ethBeforeSwap
@@ -1398,6 +1414,10 @@ async function executeSell(
       gasPrice: swapGasPrice,
     });
     const swapReceipt = await publicClient.waitForTransactionReceipt({ hash: swapHash });
+    if (swapReceipt.status !== "success") {
+      record.txHash = swapHash;
+      throw new Error(`multicall swap reverted on-chain (${swapHash})`);
+    }
 
     // Calculate gross ETH received (add back gas cost so we track token value, not net)
     const ethAfterSwap  = await publicClient.getBalance({ address: wallet.address });
@@ -1547,6 +1567,10 @@ async function executeSellGblinContract(
       gasPrice:     swapGasPrice,
     });
     const swapReceipt  = await publicClient.waitForTransactionReceipt({ hash: swapHash });
+    if (swapReceipt.status !== "success") {
+      record.txHash = swapHash;
+      throw new Error(`sellGBLINForEth reverted on-chain (${swapHash})`);
+    }
     const ethAfterSwap = await publicClient.getBalance({ address: wallet.address });
     const gasCostWei   = swapReceipt.gasUsed * (swapReceipt.effectiveGasPrice ?? swapGasPrice);
     const ethReceivedWei = ethAfterSwap + gasCostWei > ethBeforeSwap
@@ -1582,18 +1606,30 @@ async function bestExecutionBuy(
   manual = false
 ): Promise<TradeRecord> {
   await applyJitter(manual);
-  const usdAmount = selectBuyAmountUsd();
+  let usdAmount = selectBuyAmountUsd();
+
+  const ethBalance = await getEthBalance(wallet.address);
+  // Balance-aware clamp: shrink the rolled buy to what the wallet can afford
+  // (never below the smallest preset) instead of skipping the cycle outright.
+  const minPresetUsd     = Math.min(...BUY_PRESETS.map((p) => p.amount)) * 0.9;
+  const maxAffordableUsd = (ethBalance - ETH_RESERVE) * ethPriceUsd;
+  if (usdAmount > maxAffordableUsd && maxAffordableUsd >= minPresetUsd) {
+    logger.info(
+      { rolled: usdAmount.toFixed(2), clamped: maxAffordableUsd.toFixed(2) },
+      "Balance-aware buy: amount clamped to wallet affordability"
+    );
+    usdAmount = Math.floor(maxAffordableUsd * 100) / 100;
+  }
   const ethAmount = usdAmount / ethPriceUsd;
   const ethWei    = parseEther(ethAmount.toFixed(18));
 
-  const ethBalance = await getEthBalance(wallet.address);
-  if (ethBalance < ethAmount + 0.0002) {
+  if (ethBalance < ethAmount + ETH_RESERVE) {
     return {
       timestamp: new Date().toISOString(), type: "buy",
       walletIndex: wallet.index, walletAddress: wallet.address,
       ethAmount, usdAmount, tokenAmount: "0", ethPriceUsd,
       txHash: null, success: false,
-      error: `Low ETH balance: ${ethBalance.toFixed(6)} ETH`,
+      error: `Low ETH balance: ${ethBalance.toFixed(6)} ETH (reserve: ${ETH_RESERVE})`,
     };
   }
 
@@ -1752,10 +1788,140 @@ async function withRetry(
   return lastRecord;
 }
 
+// ─── Gas-deadlock rescue & emergency ETH recovery ────────────────────────────
+
+/** ETH left behind in each donor wallet during a rescue consolidation. */
+const RESCUE_DONOR_DUST = 0.00006;
+const RESCUE_RETRY_MS   = 30 * 60 * 1000;
+let   lastGasRescueAt   = 0;
+
+/** True when (cached) no wallet can sell AND none can afford the smallest buy. */
+function rescueDeadlockLikely(minBuyEthNeeded: number): boolean {
+  if (state.wallets.length === 0) return false;
+  const canSellCached = state.wallets.some(
+    (sw) => sw.ethBalance >= MIN_ETH_FOR_SELL && parseFloat(sw.tokenBalance ?? "0") > 0
+  );
+  const canBuyCached = state.wallets.some((sw) => sw.ethBalance >= minBuyEthNeeded);
+  return !canSellCached && !canBuyCached;
+}
+
+/**
+ * Total gas deadlock: nobody can buy OR sell. Consolidates ETH from donor
+ * wallets onto the GBLIN-richest wallet, then forces a sell to refuel.
+ */
+async function rescueConsolidateGas(ethPriceUsd: number): Promise<TradeRecord | null> {
+  const minBuyEthNeeded = Math.min(...BUY_PRESETS.map((p) => p.amount)) / ethPriceUsd + ETH_RESERVE;
+  if (!rescueDeadlockLikely(minBuyEthNeeded)) return null;
+  if (Date.now() - lastGasRescueAt < RESCUE_RETRY_MS) return null;
+
+  const ws = getOrCreateWallets();
+  const infos: { w: ReturnType<typeof getOrCreateWallets>[number]; eth: number; tok: number }[] = [];
+  for (const w of ws) {
+    try {
+      const eth = await getEthBalance(w.address);
+      await sleep(100);
+      const tok = await getTokenBalance(w.address);
+      infos.push({ w, eth, tok: parseFloat(tok.human) });
+    } catch (err) {
+      logger.warn({ err, wallet: w.address }, "Rescue: balance read failed – skipping rescue this cycle");
+      return null;
+    }
+    await sleep(100);
+  }
+
+  const canSell = infos.some((x) => x.eth >= MIN_ETH_FOR_SELL && x.tok > 0);
+  const canBuy  = infos.some((x) => x.eth >= minBuyEthNeeded);
+  if (canSell || canBuy) return null;
+
+  lastGasRescueAt = Date.now();
+
+  const holders = infos.filter((x) => x.tok > 0);
+  if (holders.length === 0) {
+    logger.warn("🆘 Gas deadlock: no wallet holds GBLIN either – manual ETH top-up required to resume trading");
+    return null;
+  }
+  const target    = holders.reduce((a, b) => (b.tok > a.tok ? b : a), holders[0]!);
+  const donors    = infos.filter((x) => x.w.index !== target.w.index && x.eth > RESCUE_DONOR_DUST * 2);
+  const projected = target.eth + donors.reduce((sum, d) => sum + (d.eth - RESCUE_DONOR_DUST), 0);
+  if (projected < MIN_ETH_FOR_SELL) {
+    logger.warn(
+      { projectedEth: projected.toFixed(6), need: MIN_ETH_FOR_SELL },
+      "🆘 Gas deadlock: combined ETH too low even after consolidation – manual ETH top-up required"
+    );
+    return null;
+  }
+
+  logger.warn(
+    { target: `W${target.w.index}`, donors: donors.map((d) => `W${d.w.index}`).join(",") || "none", projectedEth: projected.toFixed(6) },
+    "🆘 Gas deadlock detected – consolidating ETH on the GBLIN-richest wallet to unlock a sell"
+  );
+
+  for (const d of donors) {
+    const send = d.eth - RESCUE_DONOR_DUST;
+    if (send <= 0) continue;
+    try {
+      const hash = await d.w.walletClient.sendTransaction({
+        to:    target.w.address,
+        value: parseEther(send.toFixed(18)),
+      });
+      await publicClient.waitForTransactionReceipt({ hash });
+      logger.info({ from: `W${d.w.index}`, to: `W${target.w.index}`, amount: send.toFixed(6) }, "Rescue transfer confirmed ✅");
+    } catch (err) {
+      logger.warn({ err, from: `W${d.w.index}` }, "Rescue transfer failed – continuing with remaining donors");
+    }
+    await sleep(300);
+  }
+
+  const finalEth = await getEthBalance(target.w.address);
+  if (finalEth < MIN_ETH_FOR_SELL) {
+    logger.warn({ finalEth: finalEth.toFixed(6), need: MIN_ETH_FOR_SELL }, "Rescue consolidation insufficient – manual ETH top-up required");
+    return null;
+  }
+
+  logger.info({ wallet: `W${target.w.index}`, ethBalance: finalEth.toFixed(6) }, "Rescue: forcing SELL to replenish operating ETH");
+  return withRetry(() => bestExecutionSell(target.w, ethPriceUsd, true));
+}
+
+/**
+ * Soft deadlock: nobody can afford a buy but someone CAN sell — pick the
+ * wallet with the most GBLIN so the dispatcher can force a refuel sell.
+ */
+function findEmergencySellWallet(ethPriceUsd: number): ReturnType<typeof getOrCreateWallets>[number] | null {
+  const minBuyEthNeeded = Math.min(...BUY_PRESETS.map((p) => p.amount)) / ethPriceUsd + ETH_RESERVE;
+  if (state.wallets.length === 0) return null;
+  if (state.wallets.some((sw) => sw.ethBalance >= minBuyEthNeeded)) return null;
+  let bestIndex = -1;
+  let bestTok   = 0;
+  for (const sw of state.wallets) {
+    const tok = parseFloat(sw.tokenBalance ?? "0");
+    if (sw.ethBalance >= MIN_ETH_FOR_SELL && tok > bestTok) {
+      bestTok   = tok;
+      bestIndex = sw.index;
+    }
+  }
+  if (bestIndex < 0) return null;
+  const ws = getOrCreateWallets();
+  return ws.find((w) => w.index === bestIndex) ?? null;
+}
+
 // ─── Trade dispatcher ─────────────────────────────────────────────────────────
 
 async function executeTrade(ethPriceUsd: number): Promise<TradeRecord> {
   const wallets = getOrCreateWallets();
+
+  // ── Gas-deadlock rescue (total: nobody can buy nor sell) ───────────────────
+  const rescueRecord = await rescueConsolidateGas(ethPriceUsd);
+  if (rescueRecord) return rescueRecord;
+
+  // ── Emergency ETH recovery (soft: nobody can buy, someone can sell) ────────
+  const emergencySellWallet = findEmergencySellWallet(ethPriceUsd);
+  if (emergencySellWallet) {
+    logger.warn(
+      { wallet: emergencySellWallet.address },
+      "Emergency ETH recovery: no wallet can afford a buy - forcing GBLIN sell (cooldown bypassed)"
+    );
+    return withRetry(() => bestExecutionSell(emergencySellWallet, ethPriceUsd, true));
+  }
 
   // ── Skip trade (12 %) ───────────────────────────────────────────────────────
   // Simulates a human who glances at the chart and decides not to trade.
@@ -1784,15 +1950,24 @@ async function executeTrade(ethPriceUsd: number): Promise<TradeRecord> {
     (w) => (consecutiveBuys.get(w.index) ?? 0) >= getRebalanceThreshold(w.index)
   );
   if (rebalanceCandidate) {
-    logger.info(
-      {
-        wallet: rebalanceCandidate.address,
-        consecutiveBuys: consecutiveBuys.get(rebalanceCandidate.index),
-        threshold: getRebalanceThreshold(rebalanceCandidate.index),
-      },
-      "Rebalance: forcing SELL (best execution)"
-    );
-    return withRetry(() => bestExecutionSell(rebalanceCandidate, ethPriceUsd));
+    const rebEthBal = await getEthBalance(rebalanceCandidate.address);
+    if (rebEthBal < MIN_ETH_FOR_SELL) {
+      logger.warn(
+        { wallet: rebalanceCandidate.address, ethBal: rebEthBal.toFixed(6), need: MIN_ETH_FOR_SELL },
+        "Rebalance wallet has no ETH for gas – resetting consecutive-buy counter, falling back to BUY"
+      );
+      consecutiveBuys.set(rebalanceCandidate.index, 0);
+    } else {
+      logger.info(
+        {
+          wallet: rebalanceCandidate.address,
+          consecutiveBuys: consecutiveBuys.get(rebalanceCandidate.index),
+          threshold: getRebalanceThreshold(rebalanceCandidate.index),
+        },
+        "Rebalance: forcing SELL (best execution)"
+      );
+      return withRetry(() => bestExecutionSell(rebalanceCandidate, ethPriceUsd));
+    }
   }
   // ────────────────────────────────────────────────────────────────────────────
 
@@ -1827,12 +2002,30 @@ async function executeTrade(ethPriceUsd: number): Promise<TradeRecord> {
       return withRetry(() => bestExecutionSell(chosen, ethPriceUsd));
     }
     // All wallets in cooldown → fallback to buy
-    logger.info("All wallets in sell cooldown – falling back to BUY");
+    logger.info("No sellable inventory (or all in cooldown) – falling back to BUY (best-execution will mint at NAV on the contract)");
   }
 
-  // Weighted wallet selection for buys
-  const walletIdx = selectWalletIndex();
-  const wallet    = wallets[walletIdx]!;
+  // Weighted wallet selection for buys — balance-aware: if the drawn wallet
+  // can't afford the smallest buy, re-pick the richest affordable wallet.
+  let walletIdx = selectWalletIndex();
+  const minBuyEthNeeded = Math.min(...BUY_PRESETS.map((p) => p.amount)) / ethPriceUsd + ETH_RESERVE;
+  const cachedEthOf = (idx: number): number =>
+    state.wallets.find((sw) => sw.index === idx)?.ethBalance ?? 0;
+  if (state.wallets.length > 0 && cachedEthOf(walletIdx) < minBuyEthNeeded) {
+    const affordable = wallets.filter((w) => cachedEthOf(w.index) >= minBuyEthNeeded);
+    if (affordable.length > 0) {
+      const richest = affordable.reduce(
+        (a, b) => (cachedEthOf(b.index) > cachedEthOf(a.index) ? b : a),
+        affordable[0]!
+      );
+      logger.info(
+        { from: `W${walletIdx}`, to: `W${richest.index}` },
+        "Selected wallet cannot afford min buy – re-picking richest affordable wallet"
+      );
+      walletIdx = richest.index;
+    }
+  }
+  const wallet = wallets[walletIdx]!;
   logger.info({ sellProbability: (sellProb * 100).toFixed(0) + "%" }, "Trade type: BUY (best execution)");
   return withRetry(() => bestExecutionBuy(wallet, ethPriceUsd));
 }
@@ -2019,7 +2212,9 @@ async function checkFunding() {
 
     await refreshBalances(ethPrice);
 
-    const totalUsd = state.wallets.reduce((s, w) => s + w.usdBalance, 0);
+    // Capital = ETH + GBLIN: counting only ETH would strand the bot in
+    // waiting_for_funds after a restart when the treasury sits in GBLIN.
+    const totalUsd = state.wallets.reduce((s, w) => s + w.usdBalance + (w.tokenBalanceUsd || 0), 0);
     logger.info({ totalUsd: totalUsd.toFixed(2), threshold: FUNDED_THRESHOLD_USD }, "Balance check");
 
     if (totalUsd >= FUNDED_THRESHOLD_USD) {
