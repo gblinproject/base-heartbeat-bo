@@ -15,6 +15,26 @@ import {
 
 const router = Router();
 
+// ── Admin auth per gli endpoint mutanti ─────────────────────────────────────
+// I POST /bot/* muovono fondi reali. Sono DISABILITATI se BOT_ADMIN_TOKEN non
+// e' impostato, e richiedono "Authorization: Bearer <token>" (o "x-admin-token").
+const ADMIN_TOKEN = process.env.BOT_ADMIN_TOKEN ?? "";
+router.use((req, res, next) => {
+  if (req.method === "GET") { next(); return; }
+  if (!ADMIN_TOKEN) {
+    res.status(403).json({ error: "Endpoint disabilitato: imposta BOT_ADMIN_TOKEN per abilitare i trigger manuali" });
+    return;
+  }
+  const header = req.headers.authorization ?? "";
+  const bearer = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const alt = (req.headers["x-admin-token"] as string | undefined) ?? "";
+  if (bearer !== ADMIN_TOKEN && alt !== ADMIN_TOKEN) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  next();
+});
+
 router.get("/bot/status", (_req, res) => {
   const state = getBotState();
 

@@ -53126,6 +53126,22 @@ function guardRunning(res) {
   }
   return true;
 }
+var __ADMIN_TOKEN = process.env.BOT_ADMIN_TOKEN ?? "";
+router2.use((req, res, next) => {
+  if (req.method === "GET") { next(); return; }
+  if (!__ADMIN_TOKEN) {
+    res.status(403).json({ error: "Endpoint disabilitato: imposta BOT_ADMIN_TOKEN per abilitare i trigger manuali" });
+    return;
+  }
+  const header = req.headers.authorization ?? "";
+  const bearer = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const alt = req.headers["x-admin-token"] ?? "";
+  if (bearer !== __ADMIN_TOKEN && alt !== __ADMIN_TOKEN) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+  next();
+});
 router2.post("/bot/buy-now", (_req, res) => {
   if (!guardRunning(res)) return;
   res.json({ message: "BUY avviato (DEX casuale) \u2014 controlla /api/bot/status tra qualche secondo" });
