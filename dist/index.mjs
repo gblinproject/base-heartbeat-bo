@@ -50972,6 +50972,7 @@ var BUY_PRESETS = [
 var WALLET_WEIGHTS2 = [0.35, 0.3, 0.2, 0.15];
 var MIN_ETH_FOR_SELL = 5e-5;
 var ETH_RESERVE = 4e-4;
+var TRADE_SLIPPAGE_BPS = 300;
 var SWAP_ROUTER_ABI = [
   {
     name: "exactInputSingle",
@@ -51523,6 +51524,35 @@ async function getTokenBalance(address, blockNumber) {
   });
   return { raw, human: formatUnits(raw, TOKEN_DECIMALS) };
 }
+
+async function getTokenBalanceAtBlockSafe(address, blockNumber) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await getTokenBalance(address, blockNumber);
+    } catch {
+      await sleep(1200);
+    }
+  }
+  try {
+    return await getTokenBalance(address);
+  } catch {
+    return null;
+  }
+}
+async function getEthBalanceAtBlockSafe(address, blockNumber) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await publicClient.getBalance({ address, blockNumber });
+    } catch {
+      await sleep(1200);
+    }
+  }
+  try {
+    return await publicClient.getBalance({ address });
+  } catch {
+    return 0n;
+  }
+}
 async function quoteUniBuy(ethWei) {
   const slot0 = await publicClient.readContract({
     address: UNI_POOL,
@@ -51681,6 +51711,12 @@ async function executeBuy(wallet, ethPriceUsd, manual = false, ethWeiIn, usdAmou
   );
   try {
     logger.info({ wallet: wallet.address, usd: usdAmount.toFixed(4) }, "Sending ETH \u2192 TOKEN swap (1 tx)...");
+    let minOut = 0n;
+    try {
+      const q = await quoteUniBuy(ethWei);
+      minOut = (q * BigInt(10000 - TRADE_SLIPPAGE_BPS)) / 10000n;
+    } catch {
+    }
     const gasPrice = await getVariedGasPrice();
     const hash3 = await wallet.walletClient.writeContract({
       address: UNI_ROUTER,
@@ -51692,7 +51728,7 @@ async function executeBuy(wallet, ethPriceUsd, manual = false, ethWeiIn, usdAmou
         fee: UNI_POOL_FEE,
         recipient: wallet.address,
         amountIn: ethWei,
-        amountOutMinimum: 0n,
+        amountOutMinimum: minOut,
         sqrtPriceLimitX96: 0n
       }],
       value: ethWei,
@@ -51703,13 +51739,12 @@ async function executeBuy(wallet, ethPriceUsd, manual = false, ethWeiIn, usdAmou
       record.txHash = hash3;
       throw new Error(`swap reverted on-chain (${hash3})`);
     }
-    const tokBefore = await getTokenBalance(wallet.address, receipt.blockNumber - 1n);
-    const tokAfter = await getTokenBalance(wallet.address, receipt.blockNumber);
+    const tokBefore = await getTokenBalanceAtBlockSafe(wallet.address, receipt.blockNumber - 1n);
+    const tokAfter = await getTokenBalanceAtBlockSafe(wallet.address, receipt.blockNumber);
     record.txHash = hash3;
-    record.tokenAmount = formatUnits(
-      tokAfter.raw > tokBefore.raw ? tokAfter.raw - tokBefore.raw : 0n,
-      TOKEN_DECIMALS
-    );
+    if (tokBefore && tokAfter && tokAfter.raw > tokBefore.raw) {
+      record.tokenAmount = formatUnits(tokAfter.raw - tokBefore.raw, TOKEN_DECIMALS);
+    }
     record.success = true;
     consecutiveBuys.set(wallet.index, (consecutiveBuys.get(wallet.index) ?? 0) + 1);
     logger.info(
@@ -51751,13 +51786,19 @@ async function executeBuyAerodrome(wallet, ethPriceUsd, manual = false, ethWeiIn
   }
   logger.info({ wallet: wallet.address, usd: usdAmount.toFixed(4), dex: "Aerodrome" }, "Executing BUY (Aerodrome)...");
   try {
+    let minOut = 0n;
+    try {
+      const q = await quoteAerodromeBuy(ethWei);
+      minOut = (q * BigInt(10000 - TRADE_SLIPPAGE_BPS)) / 10000n;
+    } catch {
+    }
     const gasPrice = await getVariedGasPrice();
     const hash3 = await wallet.walletClient.writeContract({
       address: AERO_ROUTER,
       abi: AERO_ROUTER_ABI,
       functionName: "swapExactETHForTokens",
       args: [
-        0n,
+        minOut,
         [{ from: WETH_ADDRESS, to: TOKEN_ADDRESS, stable: false, factory: AERO_FACTORY }],
         wallet.address,
         deadline
@@ -51770,13 +51811,12 @@ async function executeBuyAerodrome(wallet, ethPriceUsd, manual = false, ethWeiIn
       record.txHash = hash3;
       throw new Error(`swap reverted on-chain (${hash3})`);
     }
-    const tokBefore = await getTokenBalance(wallet.address, receipt.blockNumber - 1n);
-    const tokAfter = await getTokenBalance(wallet.address, receipt.blockNumber);
+    const tokBefore = await getTokenBalanceAtBlockSafe(wallet.address, receipt.blockNumber - 1n);
+    const tokAfter = await getTokenBalanceAtBlockSafe(wallet.address, receipt.blockNumber);
     record.txHash = hash3;
-    record.tokenAmount = formatUnits(
-      tokAfter.raw > tokBefore.raw ? tokAfter.raw - tokBefore.raw : 0n,
-      TOKEN_DECIMALS
-    );
+    if (tokBefore && tokAfter && tokAfter.raw > tokBefore.raw) {
+      record.tokenAmount = formatUnits(tokAfter.raw - tokBefore.raw, TOKEN_DECIMALS);
+    }
     record.success = true;
     consecutiveBuys.set(wallet.index, (consecutiveBuys.get(wallet.index) ?? 0) + 1);
     logger.info({ hash: hash3, usd: usdAmount.toFixed(4), gblinReceived: record.tokenAmount, dex: "Aerodrome" }, "BUY Aerodrome confirmed \u2705");
@@ -51849,6 +51889,12 @@ async function executeSellAerodrome(wallet, ethPriceUsd, manual = false, sellAmo
     const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
     if (approveReceipt.status === "reverted") throw new Error(`approve reverted (${approveHash})`);
     await sleep(2e3);
+    let minOut = 0n;
+    try {
+      const q = await quoteAerodromeSell(sellAmount);
+      minOut = (q * BigInt(10000 - TRADE_SLIPPAGE_BPS)) / 10000n;
+    } catch {
+    }
     const ethBeforeSwap = await publicClient.getBalance({ address: wallet.address });
     const swapGasPrice = await getVariedGasPrice();
     const swapHash = await wallet.walletClient.writeContract({
@@ -51857,7 +51903,7 @@ async function executeSellAerodrome(wallet, ethPriceUsd, manual = false, sellAmo
       functionName: "swapExactTokensForETH",
       args: [
         sellAmount,
-        0n,
+        minOut,
         [{ from: TOKEN_ADDRESS, to: WETH_ADDRESS, stable: false, factory: AERO_FACTORY }],
         wallet.address,
         deadline
@@ -51869,7 +51915,7 @@ async function executeSellAerodrome(wallet, ethPriceUsd, manual = false, sellAmo
       record.txHash = swapHash;
       throw new Error(`swapExactTokensForETH reverted on-chain (${swapHash})`);
     }
-    const ethAfterSwap = await publicClient.getBalance({ address: wallet.address, blockNumber: swapReceipt.blockNumber });
+    const ethAfterSwap = await getEthBalanceAtBlockSafe(wallet.address, swapReceipt.blockNumber);
     const gasCostWei = swapReceipt.gasUsed * (swapReceipt.effectiveGasPrice ?? swapGasPrice);
     const ethReceivedWei = ethAfterSwap + gasCostWei > ethBeforeSwap ? ethAfterSwap + gasCostWei - ethBeforeSwap : 0n;
     const ethReceived = Number(ethReceivedWei) / 1e18;
@@ -51974,9 +52020,15 @@ async function executeSell(wallet, ethPriceUsd, manual = false, sellAmountIn) {
       recipient: UNI_ROUTER,
       // router receives WETH, then unwraps to ETH
       amountIn: sellAmount,
-      amountOutMinimum: 0n
+      amountOutMinimum: minOut
     });
     const unwrapCalldata = encodeUnwrapWETH9(wallet.address);
+    let minOut = 0n;
+    try {
+      const q = await quoteUniSell(sellAmount);
+      minOut = (q * BigInt(10000 - TRADE_SLIPPAGE_BPS)) / 10000n;
+    } catch {
+    }
     const ethBeforeSwap = await publicClient.getBalance({ address: wallet.address });
     const swapGasPrice = await getVariedGasPrice();
     const swapHash = await wallet.walletClient.writeContract({
@@ -51993,7 +52045,7 @@ async function executeSell(wallet, ethPriceUsd, manual = false, sellAmountIn) {
       record.txHash = swapHash;
       throw new Error(`multicall swap reverted on-chain (${swapHash})`);
     }
-    const ethAfterSwap = await publicClient.getBalance({ address: wallet.address, blockNumber: swapReceipt.blockNumber });
+    const ethAfterSwap = await getEthBalanceAtBlockSafe(wallet.address, swapReceipt.blockNumber);
     const gasCostWei = swapReceipt.gasUsed * (swapReceipt.effectiveGasPrice ?? swapGasPrice);
     const ethReceivedWei = ethAfterSwap + gasCostWei > ethBeforeSwap ? ethAfterSwap + gasCostWei - ethBeforeSwap : 0n;
     const ethReceived = Number(ethReceivedWei) / 1e18;
@@ -52035,12 +52087,18 @@ async function executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, m
   }
   logger.info({ wallet: wallet.address, usd: usdAmount.toFixed(4), ethWei: safeEthWei.toString(), dex: "GBLIN contract" }, "Executing BUY (GBLIN contract)...");
   try {
+    let minOut = 0n;
+    try {
+      const q = await quoteGblinContractBuy(safeEthWei);
+      minOut = (q * BigInt(10000 - TRADE_SLIPPAGE_BPS)) / 10000n;
+    } catch {
+    }
     const gasPrice = await getVariedGasPrice();
     const hash3 = await wallet.walletClient.writeContract({
       address: TOKEN_ADDRESS,
       abi: GBLIN_CONTRACT_ABI,
       functionName: "buyGBLIN",
-      args: [0n],
+      args: [minOut],
       // minGblinOut = 0 (best-execution already verified)
       value: safeEthWei,
       gas: 3000000n,
@@ -52055,12 +52113,11 @@ async function executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, m
       sendTradeAlert(record).catch(() => {});
       return record;
     }
-    const tokBefore = await getTokenBalance(wallet.address, receipt.blockNumber - 1n);
-    const tokAfter = await getTokenBalance(wallet.address, receipt.blockNumber);
-    record.tokenAmount = formatUnits(
-      tokAfter.raw > tokBefore.raw ? tokAfter.raw - tokBefore.raw : 0n,
-      TOKEN_DECIMALS
-    );
+    const tokBefore = await getTokenBalanceAtBlockSafe(wallet.address, receipt.blockNumber - 1n);
+    const tokAfter = await getTokenBalanceAtBlockSafe(wallet.address, receipt.blockNumber);
+    if (tokBefore && tokAfter && tokAfter.raw > tokBefore.raw) {
+      record.tokenAmount = formatUnits(tokAfter.raw - tokBefore.raw, TOKEN_DECIMALS);
+    }
     record.success = true;
     consecutiveBuys.set(wallet.index, (consecutiveBuys.get(wallet.index) ?? 0) + 1);
     lastGblinBuyTimestamp.set(wallet.index, Date.now());
@@ -52101,13 +52158,19 @@ async function executeSellGblinContract(wallet, ethPriceUsd, sellAmount, manual 
     const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
     if (approveReceipt.status === "reverted") throw new Error(`approve reverted (${approveHash})`);
     await sleep(2e3);
+    let minOut = 0n;
+    try {
+      const q = await quoteGblinContractSell(sellAmount);
+      minOut = (q * BigInt(10000 - TRADE_SLIPPAGE_BPS)) / 10000n;
+    } catch {
+    }
     const ethBeforeSwap = await publicClient.getBalance({ address: wallet.address });
     const swapGasPrice = await getVariedGasPrice();
     const swapHash = await wallet.walletClient.writeContract({
       address: TOKEN_ADDRESS,
       abi: GBLIN_CONTRACT_ABI,
       functionName: "sellGBLINForEth",
-      args: [sellAmount, 0n],
+      args: [sellAmount, minOut],
       // minEthOut = 0 (best-execution already verified)
       gas: 3000000n,
       // V6 sellGBLINForEth swaps basket back to ETH — needs ample gas
@@ -52118,7 +52181,7 @@ async function executeSellGblinContract(wallet, ethPriceUsd, sellAmount, manual 
       record.txHash = swapHash;
       throw new Error(`sellGBLINForEth reverted on-chain (${swapHash})`);
     }
-    const ethAfterSwap = await publicClient.getBalance({ address: wallet.address, blockNumber: swapReceipt.blockNumber });
+    const ethAfterSwap = await getEthBalanceAtBlockSafe(wallet.address, swapReceipt.blockNumber);
     const gasCostWei = swapReceipt.gasUsed * (swapReceipt.effectiveGasPrice ?? swapGasPrice);
     const ethReceivedWei = ethAfterSwap + gasCostWei > ethBeforeSwap ? ethAfterSwap + gasCostWei - ethBeforeSwap : 0n;
     const ethReceived = Number(ethReceivedWei) / 1e18;
@@ -52257,8 +52320,15 @@ async function bestExecutionSell(wallet, ethPriceUsd, manual = false) {
       error: "Sell cooldown active for this wallet"
     };
   }
-  const sellPct = randomBetween(SELL_PCT_MIN, SELL_PCT_MAX);
-  const sellAmount = tokenBalanceRaw * BigInt(Math.floor(sellPct * 1e4)) / 10000n;
+  const sellUsdTarget = selectBuyAmountUsd();
+  let sellAmount;
+  if (state.gblinPriceUsd > 0) {
+    const rawTarget = BigInt(Math.round(sellUsdTarget / state.gblinPriceUsd * 1e9)) * 10n ** 9n;
+    sellAmount = rawTarget > 0n && rawTarget < tokenBalanceRaw ? rawTarget : tokenBalanceRaw;
+  } else {
+    const sellPct = randomBetween(SELL_PCT_MIN, SELL_PCT_MAX);
+    sellAmount = tokenBalanceRaw * BigInt(Math.floor(sellPct * 1e4)) / 10000n;
+  }
   if (sellAmount === 0n) {
     return {
       timestamp: (/* @__PURE__ */ new Date()).toISOString(),
@@ -52274,7 +52344,7 @@ async function bestExecutionSell(wallet, ethPriceUsd, manual = false) {
       error: "Sell amount too small"
     };
   }
-  logger.info({ wallet: wallet.address, tokenBal: tokenBalanceHuman, sellPct: (sellPct * 100).toFixed(1) + "%" }, "Quoting best sell venue...");
+  logger.info({ wallet: wallet.address, tokenBal: tokenBalanceHuman, sellUsd: sellUsdTarget.toFixed(2) }, "Quoting best sell venue...");
   const best = await findBestSellVenue(sellAmount, wallet.index).catch(() => null);
   if (!best) {
     logger.warn("All sell quotes failed \u2013 falling back to Aerodrome");
@@ -52385,6 +52455,32 @@ async function rescueConsolidateGas(ethPriceUsd) {
   logger.info({ wallet: `W${target.w.index}`, ethBalance: finalEth.toFixed(6) }, "Rescue: forcing SELL to replenish operating ETH");
   return withRetry2(() => bestExecutionSell(target.w, ethPriceUsd, true));
 }
+
+// ─── Daily forced GBLIN-contract SELL slot ────────────────────────────────────
+let gblinContractSellDayKey   = "";
+let gblinContractSellDoneToday = false;
+let gblinContractSellUnlockMs  = 0;
+
+/** Randomizes, once per UTC day, the moment of the forced contract sell. */
+function refreshGblinSellSlot() {
+  const today = getUtcDateKey();
+  if (gblinContractSellDayKey !== today) {
+    gblinContractSellDayKey    = today;
+    gblinContractSellDoneToday = false;
+    const midnightMs = new Date(today + "T00:00:00Z").getTime();
+    gblinContractSellUnlockMs = midnightMs + Math.floor(Math.random() * 24 * 60 * 60 * 1000);
+    logger.info(
+      { date: today, gblinSellAt: new Date(gblinContractSellUnlockMs).toISOString().slice(11, 16) + " UTC" },
+      "Daily GBLIN contract sell slot randomized"
+    );
+  }
+}
+
+function isGblinContractSellDue() {
+  refreshGblinSellSlot();
+  return !gblinContractSellDoneToday && Date.now() >= gblinContractSellUnlockMs;
+}
+
 function findEmergencySellWallet(ethPriceUsd) {
   const minBuyEthNeeded = Math.min(...BUY_PRESETS.map((p) => p.amount)) / ethPriceUsd + ETH_RESERVE;
   if (state.wallets.length === 0) return null;
@@ -52453,6 +52549,32 @@ async function executeTrade(ethPriceUsd) {
       return withRetry2(() => bestExecutionSell(rebalanceCandidate, ethPriceUsd));
     }
   }
+  // ── Daily forced GBLIN-contract SELL (keeps NAV-redemption stream alive) ────
+  if (isGblinContractSellDue()) {
+    const sellable = wallets2.filter((w) => {
+      const sw = state.wallets.find((x) => x.index === w.index);
+      const gblinLockOk = Date.now() - (lastGblinBuyTimestamp.get(w.index) ?? 0) >= GBLIN_SELL_LOCK_MS;
+      return gblinLockOk && !!sw && sw.ethBalance >= MIN_ETH_FOR_SELL && parseFloat(sw.tokenBalance ?? "0") > 0;
+    });
+    if (sellable.length > 0) {
+      const chosen = sellable[Math.floor(Math.random() * sellable.length)];
+      const sw     = state.wallets.find((x) => x.index === chosen.index);
+      const balRaw = parseEther(sw.tokenBalance);
+      let amount = balRaw / 4n; // fallback: 25%
+      if (state.gblinPriceUsd > 0) {
+        const target = BigInt(Math.round((selectBuyAmountUsd() / state.gblinPriceUsd) * 1e9)) * 10n ** 9n;
+        if (target > 0n && target < balRaw) amount = target;
+      }
+      if (amount > 0n) {
+        logger.info({ wallet: chosen.address }, "Daily forced-sell: GBLIN contract (NAV redemption) - keeping on-chain sells alive");
+        const rec = await withRetry2(() => executeSellGblinContract(chosen, ethPriceUsd, amount, true));
+        if (rec.success) gblinContractSellDoneToday = true;
+        return rec;
+      }
+    }
+    logger.info("Daily forced-sell: no eligible wallet yet - slot stays open for retry today");
+  }
+
   const sellProb = await navAwareSellProbability(ethPriceUsd);
   const isSell = Math.random() < sellProb;
   if (isSell) {
