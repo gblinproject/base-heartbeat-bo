@@ -1462,6 +1462,18 @@ async function executeSell(
     await sleep(2000); // wait for RPC to see the approval
 
     logger.info({ wallet: wallet.address }, "Step 2: swap TOKEN→ETH via multicall...");
+
+    // Compute the slippage-protected minimum BEFORE building the swap calldata:
+    // `minOut` is referenced inside encodeExactInputSingle below, so it must be
+    // initialized first. Declaring it after threw a ReferenceError (let TDZ) on
+    // every sell — approve succeeded, then the swap calldata build blew up and
+    // the tx was never even sent. That was the "SELL failed" loop.
+    let minOut = 0n;
+    try {
+      const q = await quoteUniSell(sellAmount);
+      minOut = (q * BigInt(10000 - TRADE_SLIPPAGE_BPS)) / 10000n;
+    } catch { /* quote failed - trade unprotected rather than blocked */ }
+
     const swapCalldata   = encodeExactInputSingle({
       tokenIn:          TOKEN_ADDRESS,
       tokenOut:         WETH_ADDRESS,
@@ -1471,12 +1483,6 @@ async function executeSell(
       amountOutMinimum: minOut,
     });
     const unwrapCalldata = encodeUnwrapWETH9(wallet.address);
-
-    let minOut = 0n;
-    try {
-      const q = await quoteUniSell(sellAmount);
-      minOut = (q * BigInt(10000 - TRADE_SLIPPAGE_BPS)) / 10000n;
-    } catch { /* quote failed - trade unprotected rather than blocked */ }
     const ethBeforeSwap = await publicClient.getBalance({ address: wallet.address });
     const swapGasPrice  = await getVariedGasPrice();
     const swapHash = await wallet.walletClient.writeContract({

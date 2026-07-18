@@ -52013,6 +52013,12 @@ async function executeSell(wallet, ethPriceUsd, manual = false, sellAmountIn) {
     logger.info({ approveHash }, "Approval confirmed \u2705");
     await sleep(2e3);
     logger.info({ wallet: wallet.address }, "Step 2: swap TOKEN\u2192ETH via multicall...");
+    let minOut = 0n;
+    try {
+      const q = await quoteUniSell(sellAmount);
+      minOut = (q * BigInt(10000 - TRADE_SLIPPAGE_BPS)) / 10000n;
+    } catch {
+    }
     const swapCalldata = encodeExactInputSingle({
       tokenIn: TOKEN_ADDRESS,
       tokenOut: WETH_ADDRESS,
@@ -52023,12 +52029,6 @@ async function executeSell(wallet, ethPriceUsd, manual = false, sellAmountIn) {
       amountOutMinimum: minOut
     });
     const unwrapCalldata = encodeUnwrapWETH9(wallet.address);
-    let minOut = 0n;
-    try {
-      const q = await quoteUniSell(sellAmount);
-      minOut = (q * BigInt(10000 - TRADE_SLIPPAGE_BPS)) / 10000n;
-    } catch {
-    }
     const ethBeforeSwap = await publicClient.getBalance({ address: wallet.address });
     const swapGasPrice = await getVariedGasPrice();
     const swapHash = await wallet.walletClient.writeContract({
