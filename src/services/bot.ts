@@ -332,7 +332,45 @@ const ERC20_ABI = [
     inputs:  [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }],
     outputs: [{ name: "", type: "bool" }],
   },
+  {
+    name: "allowance",
+    type: "function",
+    stateMutability: "view",
+    inputs:  [{ name: "owner", type: "address" }, { name: "spender", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
 ] as const;
+
+// ─── Infinite-approval optimization ──────────────────────────────────────────
+// The bot used to send TOKEN.approve(spender, sellAmount) before EVERY sell —
+// ~950 approve txs/month across the 4 wallets, roughly half of all bot
+// transactions. One max-uint approval per (wallet, spender) makes every later
+// sell a single transaction. OZ ERC20 treats a max allowance as infinite (no
+// decrement on transferFrom); if it ever drops anyway, the floor check below
+// simply re-approves.
+const MAX_UINT256 = 2n ** 256n - 1n;
+const ALLOWANCE_FLOOR = 2n ** 128n;
+
+async function ensureAllowance(
+  wallet: { address: `0x${string}`; walletClient: { writeContract: (args: never) => Promise<`0x${string}`> } },
+  spender: `0x${string}`,
+  needed: bigint
+): Promise<void> {
+  const current = (await publicClient.readContract({
+    address: TOKEN_ADDRESS, abi: ERC20_ABI, functionName: "allowance",
+    args: [wallet.address, spender],
+  })) as bigint;
+  if (current >= needed && current >= ALLOWANCE_FLOOR) return; // infinite approval already in place
+  const approveGasPrice = await getVariedGasPrice();
+  const approveHash = await (wallet.walletClient.writeContract as CallableFunction)({
+    address: TOKEN_ADDRESS, abi: ERC20_ABI, functionName: "approve",
+    args: [spender, MAX_UINT256], gasPrice: approveGasPrice,
+  });
+  const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
+  if (approveReceipt.status === "reverted") throw new Error(`approve reverted (${approveHash})`);
+  logger.info({ wallet: wallet.address, spender }, "Infinite approval set (one-time) ✅");
+  await sleep(2000); // wait for RPC to see the approval
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -1304,16 +1342,8 @@ async function executeSellAerodrome(
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 300);
 
   try {
-    // Step 1: approve Aerodrome router
-    const approveGasPrice = await getVariedGasPrice();
-    const approveHash = await wallet.walletClient.writeContract({
-      address: TOKEN_ADDRESS, abi: ERC20_ABI, functionName: "approve",
-      args: [AERO_ROUTER, sellAmount], gasPrice: approveGasPrice,
-    });
-    const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
-    if (approveReceipt.status === "reverted") throw new Error(`approve reverted (${approveHash})`);
-
-    await sleep(2000);
+    // Step 1: ensure Aerodrome router allowance (one-time infinite approval)
+    await ensureAllowance(wallet, AERO_ROUTER, sellAmount);
 
     // Step 2: swapExactTokensForETH
     let minOut = 0n;
@@ -1442,24 +1472,11 @@ async function executeSell(
   const deadline = BigInt(Math.floor(Date.now() / 1000) + 300);
 
   try {
-    // Step 1: approve SwapRouter02 to spend tokens
-    logger.info({ wallet: wallet.address }, "Step 1: approving SwapRouter02 for TOKEN...");
-    const approveGasPrice = await getVariedGasPrice();
-    const approveHash = await wallet.walletClient.writeContract({
-      address: TOKEN_ADDRESS,
-      abi:     ERC20_ABI,
-      functionName: "approve",
-      args:     [UNI_ROUTER, sellAmount],
-      gasPrice: approveGasPrice,
-    });
-    const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
-    if (approveReceipt.status === "reverted") {
-      throw new Error(`TOKEN.approve reverted (hash ${approveHash})`);
-    }
-    logger.info({ approveHash }, "Approval confirmed ✅");
+    // Step 1: ensure SwapRouter02 allowance (one-time infinite approval)
+    logger.info({ wallet: wallet.address }, "Step 1: ensuring SwapRouter02 allowance for TOKEN...");
+    await ensureAllowance(wallet, UNI_ROUTER, sellAmount);
 
     // Step 2: multicall(exactInputSingle TOKEN→WETH, unwrapWETH9→wallet)
-    await sleep(2000); // wait for RPC to see the approval
 
     logger.info({ wallet: wallet.address }, "Step 2: swap TOKEN→ETH via multicall...");
 
@@ -1627,19 +1644,8 @@ async function executeSellGblinContract(
   logger.info({ wallet: wallet.address, tokens: record.tokenAmount, dex: "GBLIN contract" }, "Executing SELL (GBLIN contract)...");
 
   try {
-    // Step 1: approve GBLIN contract to spend tokens (spender = contract itself)
-    const approveGasPrice = await getVariedGasPrice();
-    const approveHash = await wallet.walletClient.writeContract({
-      address:      TOKEN_ADDRESS,
-      abi:          ERC20_ABI,
-      functionName: "approve",
-      args:         [TOKEN_ADDRESS, sellAmount],
-      gasPrice:     approveGasPrice,
-    });
-    const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
-    if (approveReceipt.status === "reverted") throw new Error(`approve reverted (${approveHash})`);
-
-    await sleep(2000);
+    // Step 1: ensure GBLIN contract allowance (spender = contract itself; one-time infinite approval)
+    await ensureAllowance(wallet, TOKEN_ADDRESS, sellAmount);
 
     // Step 2: sellGBLINForEth
     let minOut = 0n;

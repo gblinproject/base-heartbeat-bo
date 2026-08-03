@@ -51189,8 +51189,40 @@ var ERC20_ABI = [
     stateMutability: "nonpayable",
     inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }],
     outputs: [{ name: "", type: "bool" }]
+  },
+  {
+    name: "allowance",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }]
   }
 ];
+
+
+var MAX_UINT256_APPROVE = 2n ** 256n - 1n;
+var ALLOWANCE_FLOOR = 2n ** 128n;
+async function ensureAllowance(wallet, spender, needed) {
+  const current = await publicClient.readContract({
+    address: TOKEN_ADDRESS,
+    abi: ERC20_ABI,
+    functionName: "allowance",
+    args: [wallet.address, spender]
+  });
+  if (current >= needed && current >= ALLOWANCE_FLOOR) return;
+  const approveGasPrice = await getVariedGasPrice();
+  const approveHash = await wallet.walletClient.writeContract({
+    address: TOKEN_ADDRESS,
+    abi: ERC20_ABI,
+    functionName: "approve",
+    args: [spender, MAX_UINT256_APPROVE],
+    gasPrice: approveGasPrice
+  });
+  const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
+  if (approveReceipt.status === "reverted") throw new Error(`approve reverted (${approveHash})`);
+  logger.info({ wallet: wallet.address, spender }, "Infinite approval set (one-time) \u2705");
+  await sleep(2e3);
+}
 var state = {
   shieldLastRefreshAt: null,
   shieldLastRefreshTx: null,
@@ -51878,17 +51910,7 @@ async function executeSellAerodrome(wallet, ethPriceUsd, manual = false, sellAmo
   }, "Executing SELL (Aerodrome)...");
   const deadline = BigInt(Math.floor(Date.now() / 1e3) + 300);
   try {
-    const approveGasPrice = await getVariedGasPrice();
-    const approveHash = await wallet.walletClient.writeContract({
-      address: TOKEN_ADDRESS,
-      abi: ERC20_ABI,
-      functionName: "approve",
-      args: [AERO_ROUTER, sellAmount],
-      gasPrice: approveGasPrice
-    });
-    const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
-    if (approveReceipt.status === "reverted") throw new Error(`approve reverted (${approveHash})`);
-    await sleep(2e3);
+    await ensureAllowance(wallet, AERO_ROUTER, sellAmount);
     let minOut = 0n;
     try {
       const q = await quoteAerodromeSell(sellAmount);
@@ -51997,20 +52019,8 @@ async function executeSell(wallet, ethPriceUsd, manual = false, sellAmountIn) {
   );
   const deadline = BigInt(Math.floor(Date.now() / 1e3) + 300);
   try {
-    logger.info({ wallet: wallet.address }, "Step 1: approving SwapRouter02 for TOKEN...");
-    const approveGasPrice = await getVariedGasPrice();
-    const approveHash = await wallet.walletClient.writeContract({
-      address: TOKEN_ADDRESS,
-      abi: ERC20_ABI,
-      functionName: "approve",
-      args: [UNI_ROUTER, sellAmount],
-      gasPrice: approveGasPrice
-    });
-    const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
-    if (approveReceipt.status === "reverted") {
-      throw new Error(`TOKEN.approve reverted (hash ${approveHash})`);
-    }
-    logger.info({ approveHash }, "Approval confirmed \u2705");
+    logger.info({ wallet: wallet.address }, "Step 1: ensuring SwapRouter02 allowance for TOKEN...");
+    await ensureAllowance(wallet, UNI_ROUTER, sellAmount);
     await sleep(2e3);
     logger.info({ wallet: wallet.address }, "Step 2: swap TOKEN\u2192ETH via multicall...");
     let minOut = 0n;
@@ -52147,17 +52157,7 @@ async function executeSellGblinContract(wallet, ethPriceUsd, sellAmount, manual 
   };
   logger.info({ wallet: wallet.address, tokens: record.tokenAmount, dex: "GBLIN contract" }, "Executing SELL (GBLIN contract)...");
   try {
-    const approveGasPrice = await getVariedGasPrice();
-    const approveHash = await wallet.walletClient.writeContract({
-      address: TOKEN_ADDRESS,
-      abi: ERC20_ABI,
-      functionName: "approve",
-      args: [TOKEN_ADDRESS, sellAmount],
-      gasPrice: approveGasPrice
-    });
-    const approveReceipt = await publicClient.waitForTransactionReceipt({ hash: approveHash });
-    if (approveReceipt.status === "reverted") throw new Error(`approve reverted (${approveHash})`);
-    await sleep(2e3);
+    await ensureAllowance(wallet, TOKEN_ADDRESS, sellAmount);
     let minOut = 0n;
     try {
       const q = await quoteGblinContractSell(sellAmount);
