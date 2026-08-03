@@ -2181,6 +2181,77 @@ async function notifyTelegram(text: string): Promise<void> {
   }
 }
 
+// ─── x402 liveness watchdog ─────────────────────────────────────────────────
+// The attestation endpoint is consumed daily by a third-party agent whose
+// public witnessed log records every GBLIN outage as "unavailable" — and the
+// community directories (x402scan, nohumans.directory) probe endpoints and
+// de-rank dead ones. A silent outage now costs reputation twice, so the bot
+// (which is already always-on) checks liveness every 6h. Expected statuses:
+// the paid route must answer HTTP 402 (payment wall alive), the free sample
+// must answer HTTP 200. Anything else (5xx, timeout, unexpected 2xx on the
+// paid route) alerts on Telegram, debounced like the low-ETH alert.
+const X402_LIVENESS_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
+const X402_LIVENESS_REALERT_MS  = 12 * 60 * 60 * 1000; // re-alert while failing
+const X402_LIVENESS_TIMEOUT_MS  = 20_000;
+const X402_LIVENESS_CHECKS: ReadonlyArray<{ url: string; expect: number }> = [
+  { url: "https://gblin.digital/api/x402/attestation",        expect: 402 },
+  { url: "https://gblin.digital/api/x402/attestation-sample", expect: 200 },
+];
+const x402FailingSince   = new Map<string, number>();
+const x402LastAlert      = new Map<string, number>();
+let x402LivenessTimer: ReturnType<typeof setInterval> | null = null;
+
+async function checkX402Liveness(): Promise<void> {
+  const now = Date.now();
+  for (const check of X402_LIVENESS_CHECKS) {
+    let status = 0;
+    let failReason = "";
+    try {
+      const res = await fetch(check.url, {
+        method: "GET",
+        redirect: "manual",
+        signal: AbortSignal.timeout(X402_LIVENESS_TIMEOUT_MS),
+      });
+      status = res.status;
+      if (status !== check.expect) failReason = `HTTP ${status} (atteso ${check.expect})`;
+    } catch (err) {
+      failReason = err instanceof Error ? err.message : String(err);
+    }
+    if (failReason) {
+      if (!x402FailingSince.has(check.url)) x402FailingSince.set(check.url, now);
+      const last = x402LastAlert.get(check.url) ?? 0;
+      if (last === 0 || now - last >= X402_LIVENESS_REALERT_MS) {
+        x402LastAlert.set(check.url, now);
+        notifyTelegram(
+          `🔴 <b>x402 endpoint GIÙ — watchdog Heartbeat</b>\n` +
+          `<code>${check.url}</code>\n` +
+          `Esito: ${failReason}\n` +
+          `Ogni ora di disservizio finisce nei log pubblici di chi ci compra e nei probe delle directory.`
+        ).catch(() => {});
+      }
+      logger.error({ url: check.url, failReason }, "x402 liveness check FAILED");
+    } else {
+      if (x402FailingSince.has(check.url)) {
+        const downMin = Math.round((now - (x402FailingSince.get(check.url) ?? now)) / 60_000);
+        x402FailingSince.delete(check.url);
+        x402LastAlert.delete(check.url);
+        notifyTelegram(
+          `🟢 <b>x402 endpoint RIPRISTINATO</b>\n` +
+          `<code>${check.url}</code> di nuovo vivo (giù ~${downMin} min).`
+        ).catch(() => {});
+      }
+      logger.info({ url: check.url, status }, "x402 liveness ok");
+    }
+    await sleep(500);
+  }
+}
+
+function startX402LivenessWatchdog(): void {
+  if (x402LivenessTimer) return;
+  checkX402Liveness().catch(() => {});
+  x402LivenessTimer = setInterval(() => { checkX402Liveness().catch(() => {}); }, X402_LIVENESS_INTERVAL_MS);
+}
+
 function checkLowEth(wallets: WalletInfo[]): void {
   const now = Date.now();
   for (const w of wallets) {
@@ -2412,6 +2483,9 @@ export async function startBot() {
 
     startShieldKeeper();
     logger.info("Crash-shield keeper started — refreshWeights() hourly + incentivizedRebalance daily");
+
+    startX402LivenessWatchdog();
+    logger.info("x402 liveness watchdog started — attestation (402) + sample (200) every 6h");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     state.status      = "error";

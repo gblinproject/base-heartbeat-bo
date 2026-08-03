@@ -53690,4 +53690,57 @@ object-assign/index.js:
 @noble/curves/esm/secp256k1.js:
   (*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
 */
+
+// ─── x402 liveness watchdog (patch V-agosto-2026, speculare a src/services/bot.ts) ───
+// Blocco autonomo appeso al bundle: controlla ogni 6h che l'attestation risponda
+// 402 (paywall vivo) e il sample risponda 200; avvisa su Telegram con debounce 12h.
+(() => {
+  const CHECKS = [
+    { url: "https://gblin.digital/api/x402/attestation",        expect: 402 },
+    { url: "https://gblin.digital/api/x402/attestation-sample", expect: 200 },
+  ];
+  const INTERVAL_MS = 6 * 60 * 60 * 1000, REALERT_MS = 12 * 60 * 60 * 1000, TIMEOUT_MS = 20000;
+  const failingSince = new Map(), lastAlert = new Map();
+  async function tg(text) {
+    const token = process.env["TELEGRAM_BOT_TOKEN"], chat = process.env["TELEGRAM_CHAT_ID"];
+    if (!token || !chat) return;
+    try {
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chat, text, parse_mode: "HTML", disable_web_page_preview: true }),
+      });
+    } catch {}
+  }
+  async function run() {
+    const now = Date.now();
+    for (const c of CHECKS) {
+      let fail = "";
+      try {
+        const res = await fetch(c.url, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(TIMEOUT_MS) });
+        if (res.status !== c.expect) fail = `HTTP ${res.status} (atteso ${c.expect})`;
+      } catch (e) { fail = e && e.message ? e.message : String(e); }
+      if (fail) {
+        if (!failingSince.has(c.url)) failingSince.set(c.url, now);
+        const last = lastAlert.get(c.url) || 0;
+        if (last === 0 || now - last >= REALERT_MS) {
+          lastAlert.set(c.url, now);
+          tg(`\u{1F534} <b>x402 endpoint GI\u00d9 \u2014 watchdog Heartbeat</b>\n<code>${c.url}</code>\nEsito: ${fail}\nOgni ora di disservizio finisce nei log pubblici di chi ci compra e nei probe delle directory.`);
+        }
+        console.error(`[x402-watchdog] FAIL ${c.url}: ${fail}`);
+      } else {
+        if (failingSince.has(c.url)) {
+          const downMin = Math.round((now - failingSince.get(c.url)) / 60000);
+          failingSince.delete(c.url); lastAlert.delete(c.url);
+          tg(`\u{1F7E2} <b>x402 endpoint RIPRISTINATO</b>\n<code>${c.url}</code> di nuovo vivo (gi\u00f9 ~${downMin} min).`);
+        }
+        console.log(`[x402-watchdog] ok ${c.url}`);
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+  }
+  setTimeout(() => { run().catch(() => {}); }, 30000);
+  setInterval(() => { run().catch(() => {}); }, INTERVAL_MS);
+  console.log("[x402-watchdog] avviato \u2014 attestation(402) + sample(200) ogni 6h");
+})();
+
 //# sourceMappingURL=index.mjs.map
