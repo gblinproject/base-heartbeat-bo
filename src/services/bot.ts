@@ -2258,6 +2258,118 @@ function startX402LivenessWatchdog(): void {
   x402LivenessTimer = setInterval(() => { checkX402Liveness().catch(() => {}); }, X402_LIVENESS_INTERVAL_MS);
 }
 
+// ─── Aureus liveness watchdog ───────────────────────────────────────────────
+// The Aureus VM runs on Oracle's Always Free tier since the trial ended on
+// 2026-08-08. Oracle reclaims an Always Free instance whose CPU 95th percentile
+// stays under 20% for 7 days — and measured on 2026-08-09 ours sits at 22.3%,
+// i.e. it clears the bar only because Aureus itself cycles every 5 minutes.
+// So a stopped agent is not just a stopped agent: after a week it can cost the
+// machine, silently. This bot is already always-on and lives outside that VM,
+// which makes it the right place to notice.
+//
+// No new port or credential is needed: the agent publishes its stats to Upstash
+// and the webapp serves them, so the age of `stats.updated` is the liveness
+// signal. We also surface `halted`, which is the agent stopping itself on
+// purpose — a different failure that would otherwise stay just as quiet.
+const AUREUS_WATCHDOG_URL         = "https://gblin.digital/api/aureus";
+const AUREUS_WATCHDOG_INTERVAL_MS = 30 * 60 * 1000;      // check every 30min
+const AUREUS_STALE_AFTER_MS       = 60 * 60 * 1000;      // 12 missed 5-min cycles
+const AUREUS_WATCHDOG_REALERT_MS  = 6 * 60 * 60 * 1000;  // re-alert while down
+const AUREUS_WATCHDOG_TIMEOUT_MS  = 20_000;
+let aureusWatchdogTimer: ReturnType<typeof setInterval> | null = null;
+let aureusFailingSince = 0;
+let aureusLastAlert    = 0;
+let aureusHaltAlerted  = false;
+
+async function checkAureusLiveness(): Promise<void> {
+  const now = Date.now();
+  let problem = "";
+  let detail  = "";
+  let halted  = false;
+  let haltReason = "";
+
+  try {
+    const res = await fetch(AUREUS_WATCHDOG_URL, {
+      method: "GET",
+      signal: AbortSignal.timeout(AUREUS_WATCHDOG_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      problem = `HTTP ${res.status} dall'API`;
+    } else {
+      const body = (await res.json()) as { enabled?: boolean; stats?: { updated?: number; halted?: boolean; halt_reason?: string; equity_usd?: number; open_count?: number } | null };
+      const stats = body?.stats;
+      if (!body?.enabled || !stats) {
+        problem = "l'API risponde ma non espone statistiche";
+      } else if (typeof stats.updated !== "number") {
+        problem = "le statistiche non hanno un timestamp";
+      } else {
+        const ageMs = now - stats.updated * 1000;
+        halted     = stats.halted === true;
+        haltReason = stats.halt_reason ?? "";
+        if (ageMs > AUREUS_STALE_AFTER_MS) {
+          problem = "nessun ciclo da troppo tempo";
+          detail  = `ultimo aggiornamento ${Math.round(ageMs / 60_000)} min fa (cicla ogni 5 min)`;
+        }
+      }
+    }
+  } catch (err) {
+    problem = "API irraggiungibile";
+    detail  = err instanceof Error ? err.message : String(err);
+  }
+
+  if (problem) {
+    if (!aureusFailingSince) aureusFailingSince = now;
+    const downMin = Math.round((now - aureusFailingSince) / 60_000);
+    if (!aureusLastAlert || now - aureusLastAlert >= AUREUS_WATCHDOG_REALERT_MS) {
+      aureusLastAlert = now;
+      // downMin is how long WE have been seeing the failure, which is 0 on the
+      // first alert and would read as a contradiction next to "last update 180
+      // min ago". Only worth showing once it means something.
+      notifyTelegram(
+        `🔴 <b>Aureus non dà segni di vita</b>\n` +
+        `Problema: ${problem}${detail ? `\n${detail}` : ""}\n` +
+        (downMin >= 1 ? `Segnalato già da ~${downMin} min.\n` : "") +
+        `\nSulla VM: <code>sudo systemctl restart aureus</code>\n` +
+        `Se la VM non risponde, va riavviata dalla console Oracle.\n` +
+        `⚠️ Con Aureus fermo la VM scende sotto la soglia CPU di Oracle: dopo 7 giorni può essere reclamata.`
+      ).catch(() => {});
+    }
+    logger.error({ problem, detail }, "Aureus liveness check FAILED");
+    return;
+  }
+
+  if (aureusFailingSince) {
+    const downMin = Math.round((now - aureusFailingSince) / 60_000);
+    aureusFailingSince = 0;
+    aureusLastAlert = 0;
+    notifyTelegram(
+      `🟢 <b>Aureus è tornato</b>\nCicli di nuovo regolari (fermo ~${downMin} min).`
+    ).catch(() => {});
+  }
+
+  // Reported separately: the agent is alive and publishing, but has stopped
+  // itself. Alerted once per halt so a standing halt does not become noise.
+  if (halted && !aureusHaltAlerted) {
+    aureusHaltAlerted = true;
+    notifyTelegram(
+      `🟠 <b>Aureus si è fermato da solo</b>\n` +
+      `Motivo: ${haltReason || "non dichiarato"}\n` +
+      `L'automa è vivo e pubblica, ma non apre posizioni finché resta in questo stato.`
+    ).catch(() => {});
+  } else if (!halted && aureusHaltAlerted) {
+    aureusHaltAlerted = false;
+    notifyTelegram(`🟢 <b>Aureus ha ripreso a operare</b> (non più in halt).`).catch(() => {});
+  }
+
+  logger.info({ halted }, "Aureus liveness ok");
+}
+
+function startAureusLivenessWatchdog(): void {
+  if (aureusWatchdogTimer) return;
+  checkAureusLiveness().catch(() => {});
+  aureusWatchdogTimer = setInterval(() => { checkAureusLiveness().catch(() => {}); }, AUREUS_WATCHDOG_INTERVAL_MS);
+}
+
 function checkLowEth(wallets: WalletInfo[]): void {
   const now = Date.now();
   for (const w of wallets) {
@@ -2492,6 +2604,9 @@ export async function startBot() {
 
     startX402LivenessWatchdog();
     logger.info("x402 liveness watchdog started — attestation (402) + sample (200) every 6h");
+
+    startAureusLivenessWatchdog();
+    logger.info("Aureus liveness watchdog started — stats freshness + halt state every 30min");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     state.status      = "error";

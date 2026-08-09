@@ -53744,3 +53744,91 @@ object-assign/index.js:
 })();
 
 //# sourceMappingURL=index.mjs.map
+
+
+// ─── Aureus liveness watchdog (patch 2026-08-09, speculare a src/services/bot.ts) ───
+// La VM di Aureus sta sul piano Always Free di Oracle da quando la trial e' finita
+// (08/08/2026). Oracle reclama un'istanza Always Free se per 7 giorni la CPU al 95o
+// percentile resta sotto il 20%: misurata il 09/08 sta a 22,3%, cioe' passa la soglia
+// SOLO perche' Aureus cicla ogni 5 minuti. Quindi un automa fermo non e' solo un automa
+// fermo: dopo una settimana puo' costare la macchina, in silenzio.
+// Nessuna porta nuova ne' credenziali: l'automa pubblica le stats su Upstash e la webapp
+// le serve, quindi l'eta' di stats.updated e' il segnale di vita.
+(() => {
+  const URL = "https://gblin.digital/api/aureus";
+  const INTERVAL_MS = 30 * 60 * 1000, STALE_MS = 60 * 60 * 1000,
+        REALERT_MS = 6 * 60 * 60 * 1000, TIMEOUT_MS = 20000;
+  let failingSince = 0, lastAlert = 0, haltAlerted = false;
+
+  async function tg(text) {
+    const token = process.env["TELEGRAM_BOT_TOKEN"], chat = process.env["TELEGRAM_CHAT_ID"];
+    if (!token || !chat) return;
+    try {
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chat, text, parse_mode: "HTML", disable_web_page_preview: true }),
+      });
+    } catch {}
+  }
+
+  async function run() {
+    const now = Date.now();
+    let problem = "", detail = "", halted = false, haltReason = "";
+    try {
+      const res = await fetch(URL, { method: "GET", signal: AbortSignal.timeout(TIMEOUT_MS) });
+      if (!res.ok) {
+        problem = `HTTP ${res.status} dall'API`;
+      } else {
+        const body = await res.json();
+        const stats = body && body.stats;
+        if (!body || !body.enabled || !stats) {
+          problem = "l'API risponde ma non espone statistiche";
+        } else if (typeof stats.updated !== "number") {
+          problem = "le statistiche non hanno un timestamp";
+        } else {
+          const ageMs = now - stats.updated * 1000;
+          halted = stats.halted === true;
+          haltReason = stats.halt_reason || "";
+          if (ageMs > STALE_MS) {
+            problem = "nessun ciclo da troppo tempo";
+            detail = `ultimo aggiornamento ${Math.round(ageMs / 60000)} min fa (cicla ogni 5 min)`;
+          }
+        }
+      }
+    } catch (e) {
+      problem = "API irraggiungibile";
+      detail = e && e.message ? e.message : String(e);
+    }
+
+    if (problem) {
+      if (!failingSince) failingSince = now;
+      const downMin = Math.round((now - failingSince) / 60000);
+      if (!lastAlert || now - lastAlert >= REALERT_MS) {
+        lastAlert = now;
+        tg(`\u{1F534} <b>Aureus non dà segni di vita</b>\nProblema: ${problem}${detail ? "\n" + detail : ""}\n${downMin >= 1 ? `Segnalato già da ~${downMin} min.\n` : ""}\nSulla VM: <code>sudo systemctl restart aureus</code>\nSe la VM non risponde, va riavviata dalla console Oracle.\n⚠️ Con Aureus fermo la VM scende sotto la soglia CPU di Oracle: dopo 7 giorni può essere reclamata.`);
+      }
+      console.error(`[aureus-watchdog] FAIL: ${problem} ${detail}`);
+      return;
+    }
+
+    if (failingSince) {
+      const downMin = Math.round((now - failingSince) / 60000);
+      failingSince = 0; lastAlert = 0;
+      tg(`\u{1F7E2} <b>Aureus è tornato</b>\nCicli di nuovo regolari (fermo ~${downMin} min).`);
+    }
+
+    if (halted && !haltAlerted) {
+      haltAlerted = true;
+      tg(`\u{1F7E0} <b>Aureus si è fermato da solo</b>\nMotivo: ${haltReason || "non dichiarato"}\nL'automa è vivo e pubblica, ma non apre posizioni finché resta in questo stato.`);
+    } else if (!halted && haltAlerted) {
+      haltAlerted = false;
+      tg(`\u{1F7E2} <b>Aureus ha ripreso a operare</b> (non più in halt).`);
+    }
+
+    console.log(`[aureus-watchdog] ok${halted ? " (in halt)" : ""}`);
+  }
+
+  setTimeout(() => { run().catch(() => {}); }, 45000);
+  setInterval(() => { run().catch(() => {}); }, INTERVAL_MS);
+  console.log("[aureus-watchdog] avviato — freschezza stats + stato halt ogni 30min");
+})();
