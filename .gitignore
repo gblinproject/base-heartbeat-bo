@@ -4,3 +4,6 @@ wallet-data.json
 node_modules/
 .DS_Store
 *.bak.*
+
+# graphify (knowledge graph locale, non versionato)
+graphify-out/
