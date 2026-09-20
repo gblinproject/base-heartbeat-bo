@@ -52123,8 +52123,8 @@ async function executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, m
       sendTradeAlert(record).catch(() => {});
       return record;
     }
-    const tokBefore = await getTokenBalanceAtBlockSafe(wallet.address, receipt.blockNumber - 1n);
-    const tokAfter = await getTokenBalanceAtBlockSafe(wallet.address, receipt.blockNumber);
+    const tokBefore = await getTokenBalanceAtBlockSafe(wallet.address, buyReceipt.blockNumber - 1n);
+    const tokAfter = await getTokenBalanceAtBlockSafe(wallet.address, buyReceipt.blockNumber);
     if (tokBefore && tokAfter && tokAfter.raw > tokBefore.raw) {
       record.tokenAmount = formatUnits(tokAfter.raw - tokBefore.raw, TOKEN_DECIMALS);
     }
