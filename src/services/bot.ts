@@ -2370,6 +2370,32 @@ function startAureusLivenessWatchdog(): void {
   aureusWatchdogTimer = setInterval(() => { checkAureusLiveness().catch(() => {}); }, AUREUS_WATCHDOG_INTERVAL_MS);
 }
 
+// Avviso di PAUSA: il bot smette di operare sotto FUNDED_THRESHOLD_USD e finora lo faceva in
+// silenzio — il 17/09 e' rimasto fermo due giorni senza che nessuno se ne accorgesse. L'avviso
+// per-wallet non copre questo caso: puo' tacere mentre l'insieme e' sotto soglia, o gridare
+// mentre il bot lavora benissimo (soglia in ETH contro obiettivo in dollari).
+let lowPoolLastAlert = 0;
+const LOW_POOL_REALERT_MS = 12 * 60 * 60 * 1000;
+
+function notifyLowPool(totalUsd: number): void {
+  const now = Date.now();
+  if (now - lowPoolLastAlert < LOW_POOL_REALERT_MS) return;
+  lowPoolLastAlert = now;
+  notifyTelegram(
+    `⏸ <b>Bot in pausa — fondi sotto la soglia</b>\n` +
+    `Totale dei 4 wallet: <b>$${totalUsd.toFixed(2)}</b> (serve $${FUNDED_THRESHOLD_USD})\n` +
+    `Ricarica ETH su Base su un wallet qualsiasi: riparte da solo entro un minuto.`
+  ).catch(() => {});
+}
+
+function notifyPoolRecovered(totalUsd: number): void {
+  if (!lowPoolLastAlert) return;
+  lowPoolLastAlert = 0;
+  notifyTelegram(
+    `▶️ <b>Bot ripartito</b>\nTotale dei 4 wallet: <b>$${totalUsd.toFixed(2)}</b>.`
+  ).catch(() => {});
+}
+
 function checkLowEth(wallets: WalletInfo[]): void {
   const now = Date.now();
   for (const w of wallets) {
@@ -2543,6 +2569,9 @@ async function checkFunding() {
       await distributeFunds(ethPrice);
       await refreshBalances(ethPrice);
       scheduleNextTrade();
+      notifyPoolRecovered(totalUsd);
+    } else {
+      notifyLowPool(totalUsd);
     }
   } catch (err) {
     logger.error({ err }, "Error during funding check");

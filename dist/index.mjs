@@ -52641,6 +52641,23 @@ async function notifyTelegram(text) {
   }
 }
 
+let lowPoolLastAlert = 0;
+const LOW_POOL_REALERT_MS = 12 * 60 * 60 * 1e3;
+function notifyLowPool(totalUsd) {
+  const now = Date.now();
+  if (now - lowPoolLastAlert < LOW_POOL_REALERT_MS) return;
+  lowPoolLastAlert = now;
+  notifyTelegram(
+    `\u23f8 <b>Bot in pausa \u2014 fondi sotto la soglia</b>\n` +
+    `Totale dei 4 wallet: <b>$${totalUsd.toFixed(2)}</b> (serve $${FUNDED_THRESHOLD_USD})\n` +
+    `Ricarica ETH su Base su un wallet qualsiasi: riparte da solo entro un minuto.`
+  ).catch(() => {});
+}
+function notifyPoolRecovered(totalUsd) {
+  if (!lowPoolLastAlert) return;
+  lowPoolLastAlert = 0;
+  notifyTelegram(`\u25b6\ufe0f <b>Bot ripartito</b>\nTotale dei 4 wallet: <b>$${totalUsd.toFixed(2)}</b>.`).catch(() => {});
+}
 function checkLowEth(wallets) {
   const now = Date.now();
   for (const w of wallets) {
@@ -52776,6 +52793,9 @@ async function checkFunding() {
       await distributeFunds(ethPrice);
       await refreshBalances(ethPrice);
       scheduleNextTrade();
+      notifyPoolRecovered(totalUsd);
+    } else {
+      notifyLowPool(totalUsd);
     }
   } catch (err) {
     logger.error({ err }, "Error during funding check");
