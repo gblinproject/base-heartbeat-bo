@@ -1199,7 +1199,7 @@ async function executeBuy(
     logger.error({ err }, "BUY failed");
   }
 
-  sendTradeAlert(record).catch(() => {}); // fire-and-forget
+  alertTrade(record); // fire-and-forget
   return record;
 }
 
@@ -1281,7 +1281,7 @@ async function executeBuyAerodrome(
     logger.error({ err }, "BUY Aerodrome failed");
   }
 
-  sendTradeAlert(record).catch(() => {});
+  alertTrade(record);
   return record;
 }
 
@@ -1389,7 +1389,7 @@ async function executeSellAerodrome(
     logger.error({ err }, "SELL Aerodrome failed");
   }
 
-  sendTradeAlert(record).catch(() => {});
+  alertTrade(record);
   return record;
 }
 
@@ -1538,7 +1538,7 @@ async function executeSell(
     logger.error({ err }, "SELL failed");
   }
 
-  sendTradeAlert(record).catch(() => {}); // fire-and-forget
+  alertTrade(record); // fire-and-forget
   return record;
 }
 
@@ -1596,7 +1596,7 @@ async function executeBuyGblinContract(
     if (receipt.status !== "success") {
       record.error = `buyGBLIN reverted on-chain (${hash})`;
       logger.error({ hash, status: receipt.status }, "BUY GBLIN contract FAILED on-chain ❌");
-      sendTradeAlert(record).catch(() => {});
+      alertTrade(record);
       return record;
     }
     // Deterministic reads at the tx block (avoids stale-RPC 0-amount records)
@@ -1615,7 +1615,7 @@ async function executeBuyGblinContract(
     logger.error({ err }, "BUY GBLIN contract failed");
   }
 
-  sendTradeAlert(record).catch(() => {});
+  alertTrade(record);
   return record;
 }
 
@@ -1687,7 +1687,7 @@ async function executeSellGblinContract(
     logger.error({ err }, "SELL GBLIN contract failed");
   }
 
-  sendTradeAlert(record).catch(() => {});
+  alertTrade(record);
   return record;
 }
 
@@ -1872,17 +1872,30 @@ const SKIP_ERRORS = [
  * Waits 30–60 s between attempts so gas conditions can settle.
  * Does NOT retry on "skip" errors (no balance, cooldown, etc.).
  */
+/**
+ * Un fallimento che verra' RIPETUTO non e' una notizia. Fino al 20/09/2026 ogni tentativo
+ * intermedio mandava il suo avviso: su 9 fallimenti in 16 ore, quasi tutti erano poi riusciti
+ * al secondo colpo, e l'avviso arrivava lo stesso. Ora dei fallimenti parla solo withRetry,
+ * una volta sola, quando non ci sono piu' tentativi. I successi restano annunciati dall'executor.
+ */
+let alertsSuppressed = false;
+function alertTrade(record: TradeRecord): void {
+  if (!record.success && alertsSuppressed) return;
+  alertTrade(record);
+}
+
 async function withRetry(
   fn: () => Promise<TradeRecord>,
   maxAttempts = 3
 ): Promise<TradeRecord> {
   let lastRecord!: TradeRecord;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    alertsSuppressed = true;          // i fallimenti intermedi restano muti
     lastRecord = await fn();
+    alertsSuppressed = false;
     if (lastRecord.success) return lastRecord;
-
     const isSkip = SKIP_ERRORS.some((s) => lastRecord.error?.includes(s));
-    if (isSkip || attempt === maxAttempts) return lastRecord;
+    if (isSkip || attempt === maxAttempts) { alertTrade(lastRecord); return lastRecord; }
 
     const waitMs = randomBetween(30_000, 60_000);
     logger.warn(

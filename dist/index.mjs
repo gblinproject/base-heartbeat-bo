@@ -51787,8 +51787,7 @@ async function executeBuy(wallet, ethPriceUsd, manual = false, ethWeiIn, usdAmou
     record.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
     logger.error({ err }, "BUY failed");
   }
-  sendTradeAlert(record).catch(() => {
-  });
+  alertTrade(record);
   return record;
 }
 async function executeBuyAerodrome(wallet, ethPriceUsd, manual = false, ethWeiIn, usdAmountIn) {
@@ -51856,8 +51855,7 @@ async function executeBuyAerodrome(wallet, ethPriceUsd, manual = false, ethWeiIn
     record.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
     logger.error({ err }, "BUY Aerodrome failed");
   }
-  sendTradeAlert(record).catch(() => {
-  });
+  alertTrade(record);
   return record;
 }
 async function executeSellAerodrome(wallet, ethPriceUsd, manual = false, sellAmountIn) {
@@ -51953,8 +51951,7 @@ async function executeSellAerodrome(wallet, ethPriceUsd, manual = false, sellAmo
     record.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
     logger.error({ err }, "SELL Aerodrome failed");
   }
-  sendTradeAlert(record).catch(() => {
-  });
+  alertTrade(record);
   return record;
 }
 async function executeSell(wallet, ethPriceUsd, manual = false, sellAmountIn) {
@@ -52071,8 +52068,7 @@ async function executeSell(wallet, ethPriceUsd, manual = false, sellAmountIn) {
     record.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
     logger.error({ err }, "SELL failed");
   }
-  sendTradeAlert(record).catch(() => {
-  });
+  alertTrade(record);
   return record;
 }
 async function executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, manual = false) {
@@ -52120,7 +52116,7 @@ async function executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, m
     if (buyReceipt.status !== "success") {
       record.error = `buyGBLIN reverted on-chain (${hash3})`;
       logger.error({ hash: hash3, status: buyReceipt.status }, "BUY GBLIN contract FAILED on-chain ❌");
-      sendTradeAlert(record).catch(() => {});
+      alertTrade(record);
       return record;
     }
     const tokBefore = await getTokenBalanceAtBlockSafe(wallet.address, buyReceipt.blockNumber - 1n);
@@ -52137,8 +52133,7 @@ async function executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, m
     record.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
     logger.error({ err }, "BUY GBLIN contract failed");
   }
-  sendTradeAlert(record).catch(() => {
-  });
+  alertTrade(record);
   return record;
 }
 async function executeSellGblinContract(wallet, ethPriceUsd, sellAmount, manual = false) {
@@ -52197,8 +52192,7 @@ async function executeSellGblinContract(wallet, ethPriceUsd, sellAmount, manual 
     record.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
     logger.error({ err }, "SELL GBLIN contract failed");
   }
-  sendTradeAlert(record).catch(() => {
-  });
+  alertTrade(record);
   return record;
 }
 async function bestExecutionBuy(wallet, ethPriceUsd, manual = false) {
@@ -52364,13 +52358,20 @@ var SKIP_ERRORS = [
   "Sell amount too small",
   "cooldown"
 ];
+let alertsSuppressed = false;
+function alertTrade(record) {
+  if (!record.success && alertsSuppressed) return;
+  sendTradeAlert(record).catch(() => {});
+}
 async function withRetry2(fn, maxAttempts = 3) {
   let lastRecord;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    alertsSuppressed = true;          // i fallimenti intermedi restano muti
     lastRecord = await fn();
+    alertsSuppressed = false;
     if (lastRecord.success) return lastRecord;
     const isSkip = SKIP_ERRORS.some((s) => lastRecord.error?.includes(s));
-    if (isSkip || attempt === maxAttempts) return lastRecord;
+    if (isSkip || attempt === maxAttempts) { alertTrade(lastRecord); return lastRecord; }
     const waitMs = randomBetween(3e4, 6e4);
     logger.warn(
       { attempt, maxAttempts, waitSec: (waitMs / 1e3).toFixed(0), error: lastRecord.error?.slice(0, 80) },
