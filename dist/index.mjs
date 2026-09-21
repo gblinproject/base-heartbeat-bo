@@ -53768,13 +53768,12 @@ object-assign/index.js:
 
 
 // ─── Aureus liveness watchdog (patch 2026-08-09, speculare a src/services/bot.ts) ───
-// La VM di Aureus sta sul piano Always Free di Oracle da quando la trial e' finita
-// (08/08/2026). Oracle reclama un'istanza Always Free se per 7 giorni la CPU al 95o
-// percentile resta sotto il 20%: misurata il 09/08 sta a 22,3%, cioe' passa la soglia
-// SOLO perche' Aureus cicla ogni 5 minuti. Quindi un automa fermo non e' solo un automa
-// fermo: dopo una settimana puo' costare la macchina, in silenzio.
-// Nessuna porta nuova ne' credenziali: l'automa pubblica le stats su Upstash e la webapp
-// le serve, quindi l'eta' di stats.updated e' il segnale di vita.
+// The host reclaims an idle instance when 95th-percentile CPU stays under the
+// threshold for a week, and the periodic cycle is what keeps it above the line.
+// A stopped process is therefore not just a stopped process: left alone it can
+// cost the machine, silently. No extra port and no credentials are needed --
+// stats are published to the shared store and served by the web app, so the age
+// of stats.updated is the liveness signal.
 (() => {
   const URL = "https://gblin.digital/api/aureus";
   const INTERVAL_MS = 30 * 60 * 1000, STALE_MS = 60 * 60 * 1000,

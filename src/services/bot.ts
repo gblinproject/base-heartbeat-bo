@@ -1873,10 +1873,9 @@ const SKIP_ERRORS = [
  * Does NOT retry on "skip" errors (no balance, cooldown, etc.).
  */
 /**
- * Un fallimento che verra' RIPETUTO non e' una notizia. Fino al 20/09/2026 ogni tentativo
- * intermedio mandava il suo avviso: su 9 fallimenti in 16 ore, quasi tutti erano poi riusciti
- * al secondo colpo, e l'avviso arrivava lo stesso. Ora dei fallimenti parla solo withRetry,
- * una volta sola, quando non ci sono piu' tentativi. I successi restano annunciati dall'executor.
+ * A failure that will be retried is not news. Only withRetry reports failures,
+ * once, when no attempt is left; successes stay with the executor. Alerting on
+ * every intermediate attempt is noise, because most of them succeed on the next try.
  */
 let alertsSuppressed = false;
 function alertTrade(record: TradeRecord): void {
@@ -2383,10 +2382,10 @@ function startAureusLivenessWatchdog(): void {
   aureusWatchdogTimer = setInterval(() => { checkAureusLiveness().catch(() => {}); }, AUREUS_WATCHDOG_INTERVAL_MS);
 }
 
-// Avviso di PAUSA: il bot smette di operare sotto FUNDED_THRESHOLD_USD e finora lo faceva in
-// silenzio — il 17/09 e' rimasto fermo due giorni senza che nessuno se ne accorgesse. L'avviso
-// per-wallet non copre questo caso: puo' tacere mentre l'insieme e' sotto soglia, o gridare
-// mentre il bot lavora benissimo (soglia in ETH contro obiettivo in dollari).
+// Paused alert: trading stops below FUNDED_THRESHOLD_USD, and a silent stop is
+// indistinguishable from a healthy idle run. The per-wallet alert does not cover
+// this case: it compares an ETH threshold against a dollar target, so it can stay
+// quiet while the pool as a whole is below the line, or fire while trading is fine.
 let lowPoolLastAlert = 0;
 const LOW_POOL_REALERT_MS = 12 * 60 * 60 * 1000;
 
