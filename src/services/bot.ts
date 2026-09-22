@@ -29,6 +29,21 @@ const UNI_ROUTER  = "0x2626664c2603336E57B271c5C0b26F421741e481" as `0x${string}
 const UNI_POOL     = "0x779C4260022bf7493d303Ff016C3C63215ee9B19" as `0x${string}`;
 const UNI_POOL_FEE = 3000; // 0.3% (tier scelto per la pool V6)
 
+// Superfici del vault in servizio: i preventivi vivono sulla Lens, l'uscita in ETH sullo Zap.
+const LENS_ADDRESS = "0xfCFea8027019E8551A1f09AD91532471F5D26f61" as `0x${string}`;
+const ZAP_ADDRESS = "0x0E9D6Ceb6D313b021622C121Cda9C62e86e60200" as `0x${string}`;
+const LENS_ABI = [
+  { name: "quoteBuy", type: "function", stateMutability: "view", inputs: [{ name: "vault", type: "address" }, { name: "ethValue", type: "uint256" }], outputs: [{ name: "out", type: "uint256" }, { name: "protocolFee", type: "uint256" }, { name: "stabilityFee", type: "uint256" }] },
+  { name: "quoteSell", type: "function", stateMutability: "view", inputs: [{ name: "vault", type: "address" }, { name: "gblinAmount", type: "uint256" }], outputs: [{ name: "", type: "uint256" }] }
+];
+const ZAP_ABI = [
+  { name: "sellGBLINForEth", type: "function", stateMutability: "nonpayable", inputs: [{ name: "shares", type: "uint256" }, { name: "minEthOut", type: "uint256" }, { name: "venueData", type: "bytes[]" }, { name: "receiver", type: "address" }], outputs: [{ name: "ethOut", type: "uint256" }] }
+] as const;
+// Una voce per riga del paniere: il livello di commissione della pool su cui lo Zap vende quella gamba.
+const ZAP_VENUE_DATA = ["0x00000000000000000000000000000000000000000000000000000000000001f4", "0x00000000000000000000000000000000000000000000000000000000000001f4", "0x00000000000000000000000000000000000000000000000000000000000001f4"] as `0x${string}`[];
+// L'uscita consuma circa 810.000 di gas ma pretende un limite piu' alto per la riserva dei trasferimenti.
+const ZAP_EXIT_GAS = 1300000n;
+
 /** Aerodrome V1 volatile pool: GBLIN(V6)/WETH. (V5 era 0x7dcd4f5b...92ae1b) */
 const AERO_ROUTER  = "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43" as `0x${string}`;
 const AERO_FACTORY = "0x420DD381b31aEf6683db6B902084cB0FFECe40Da" as `0x${string}`;
@@ -989,24 +1004,24 @@ async function quoteGblinContractBuy(ethWei: bigint): Promise<bigint> {
   // Enforce contract minimum: 0.0005 ETH
   const safeEthWei = ethWei < GBLIN_MIN_ETH_WEI ? GBLIN_MIN_ETH_WEI : ethWei;
   const [gblinOut] = await publicClient.readContract({
-    address: TOKEN_ADDRESS,
-    abi:     GBLIN_CONTRACT_ABI,
-    functionName: "quoteBuyGBLIN",
-    args:    [safeEthWei],
+    address: LENS_ADDRESS,
+    abi:     LENS_ABI,
+    functionName: "quoteBuy",
+    args:    [TOKEN_ADDRESS, safeEthWei],
   });
   // Apply 0.1% fee discount for fair comparison: the contract retains 0.1% of
   // the buy amount regardless of whether quoteBuyGBLIN returns gross or net.
   // This ensures GBLIN only wins best-execution if genuinely cheaper post-fee.
-  return (gblinOut * 999n) / 1000n;
+  return gblinOut;
 }
 
 /** Quote GBLIN contract: TOKEN → ETH (sell) */
 async function quoteGblinContractSell(gblinWei: bigint): Promise<bigint> {
   return publicClient.readContract({
-    address: TOKEN_ADDRESS,
-    abi:     GBLIN_CONTRACT_ABI,
-    functionName: "quoteSellGBLIN",
-    args:    [gblinWei],
+    address: LENS_ADDRESS,
+    abi:     LENS_ABI,
+    functionName: "quoteSell",
+    args:    [TOKEN_ADDRESS, gblinWei],
   });
 }
 
@@ -1031,7 +1046,7 @@ async function findBestBuyVenue(ethWei: bigint, excludeGblin = false): Promise<Q
   const results: QuoteResult[] = [];
   if (uni.status   === "fulfilled") results.push(uni.value);
   // Aerodrome escluso: nessuna pool sul vault in servizio.
-  // Percorso sul contratto escluso: sul vault in servizio i preventivi stanno sulla Lens e l'uscita in ETH sullo Zap.
+  if (!excludeGblin && gblin?.status === "fulfilled") results.push(gblin.value);
 
   if (results.length === 0) throw new Error("All buy venues failed to quote");
 
@@ -1062,7 +1077,7 @@ async function findBestSellVenue(gblinWei: bigint, walletIndex?: number): Promis
   const results: QuoteResult[] = [];
   if (uni.status   === "fulfilled") results.push(uni.value);
   // Aerodrome escluso: nessuna pool sul vault in servizio.
-  // Percorso sul contratto escluso: vedi sopra.
+  if (!gblinLocked && gblin?.status === "fulfilled") results.push(gblin.value);
 
   if (results.length === 0) throw new Error("All sell venues failed to quote");
 
@@ -1645,7 +1660,7 @@ async function executeSellGblinContract(
 
   try {
     // Step 1: ensure GBLIN contract allowance (spender = contract itself; one-time infinite approval)
-    await ensureAllowance(wallet, TOKEN_ADDRESS, sellAmount);
+    await ensureAllowance(wallet, ZAP_ADDRESS, sellAmount);
 
     // Step 2: sellGBLINForEth
     let minOut = 0n;
@@ -1656,11 +1671,11 @@ async function executeSellGblinContract(
     const ethBeforeSwap = await publicClient.getBalance({ address: wallet.address });
     const swapGasPrice  = await getVariedGasPrice();
     const swapHash = await wallet.walletClient.writeContract({
-      address:      TOKEN_ADDRESS,
-      abi:          GBLIN_CONTRACT_ABI,
+      address:      ZAP_ADDRESS,
+      abi:          ZAP_ABI,
       functionName: "sellGBLINForEth",
-      args:         [sellAmount, minOut], // minEthOut = 0 (best-execution already verified)
-      gas:          3_000_000n, // V6 sellGBLINForEth swaps basket back to ETH — needs ample gas
+      args:         [sellAmount, minOut, ZAP_VENUE_DATA, wallet.address],
+      gas:          ZAP_EXIT_GAS,
       gasPrice:     swapGasPrice,
     });
     const swapReceipt  = await publicClient.waitForTransactionReceipt({ hash: swapHash });
@@ -1750,9 +1765,9 @@ async function bestExecutionBuy(
   // best-execution would essentially never route here. Force exactly one direct
   // contract buy per day, at the randomized unlock slot, so on-chain `Minted`
   // activity never stalls (keeps the "contract (buy)" stream alive).
-  // Conio diretto sospeso sul vault in servizio: la sua quotazione vive sulla Lens e l'uscita in ETH
-  // sullo Zap, superfici che il bot non conosce ancora. Riaprirlo quando saranno collegate.
-  if (false && isGblinContractBuyAllowed() && ethWei >= GBLIN_MIN_ETH_WEI) {
+  // Un acquisto al giorno deve passare dal contratto: il conio avviene al valore patrimoniale netto e la
+  // pool tratta quasi sempre sotto, quindi la sola miglior esecuzione non ci arriverebbe mai.
+  if (isGblinContractBuyAllowed()) {
     logger.info("Daily forced-buy: GBLIN contract (NAV mint) — keeping direct on-chain buys alive");
     const forced = await executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, manual);
     if (forced.success) return forced;
@@ -2642,8 +2657,9 @@ export async function startBot() {
     startWatchdog();
     logger.info("Watchdog started — scheduler will be auto-revived if it dies");
 
-    startShieldKeeper();
-    logger.info("Crash-shield keeper started — refreshWeights() hourly + incentivizedRebalance daily");
+    // Keeper spento sul vault in servizio: lo scudo si aggiorna dentro conii, riscatti e riempimenti
+    // d'asta, e il ribilanciamento lo fa l'asta olandese. Il bot non lo tocca piu'.
+    logger.info("Crash-shield keeper non attivo: il ribilanciamento passa dall'asta");
 
     startX402LivenessWatchdog();
     logger.info("x402 liveness watchdog started — attestation (402) + sample (200) every 6h");
