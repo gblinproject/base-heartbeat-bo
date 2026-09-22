@@ -940,38 +940,63 @@ interface QuoteResult {
   amountOut: bigint;
 }
 
+const UNI_POOL_TOKEN0_ABI = [
+  { name: "token0", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "address" }] },
+] as const;
+
 /**
- * Quote Uniswap V3: ETH → TOKEN (buy).
- * Uses pool slot0 sqrtPriceX96 directly — no QuoterV2 needed.
- * token0=GBLIN, token1=WETH → price = sqrtPriceX96² / 2¹⁹² = WETH per GBLIN
- * amountOut_GBLIN = amountIn_WETH × 2¹⁹² / sqrtPriceX96² × (1e6 − fee) / 1e6
+ * Which side of the pool the share token sits on. It is READ from the pool, never assumed:
+ * token ordering in a Uniswap V3 pool follows the address order, so a new deployment can flip it.
+ * The previous pool had the token as token0; the pool in service has WETH as token0.
+ * Getting this wrong inverts the price and the quote is off by the square of it.
  */
-async function quoteUniBuy(ethWei: bigint): Promise<bigint> {
+let tokenIsToken0: boolean | null = null;
+async function tokenIsPoolToken0(): Promise<boolean> {
+  if (tokenIsToken0 === null) {
+    const t0 = await publicClient.readContract({
+      address: UNI_POOL,
+      abi:     UNI_POOL_TOKEN0_ABI,
+      functionName: "token0",
+    }) as `0x${string}`;
+    tokenIsToken0 = t0.toLowerCase() === TOKEN_ADDRESS.toLowerCase();
+  }
+  return tokenIsToken0;
+}
+
+async function poolSqrtPriceX96(): Promise<bigint> {
   const slot0 = await publicClient.readContract({
     address: UNI_POOL,
     abi:     UNI_POOL_SLOT0_ABI,
     functionName: "slot0",
   });
-  const sqrtPriceX96 = slot0[0];
-  const Q192 = 2n ** 192n;
-  return (ethWei * Q192 / (sqrtPriceX96 * sqrtPriceX96)) *
-    (1_000_000n - BigInt(UNI_POOL_FEE)) / 1_000_000n;
+  return slot0[0];
 }
 
 /**
- * Quote Uniswap V3: TOKEN → ETH (sell).
- * amountOut_WETH = amountIn_GBLIN × sqrtPriceX96² / 2¹⁹² × (1e6 − fee) / 1e6
+ * Quote Uniswap V3: ETH → TOKEN (buy).
+ * Uses pool slot0 sqrtPriceX96 directly — no QuoterV2 needed.
+ * sqrtPriceX96² / 2¹⁹² is the price of token1 in units of token0, so the direction
+ * depends on which side the share token is on.
+ */
+async function quoteUniBuy(ethWei: bigint): Promise<bigint> {
+  const sqrtPriceX96 = await poolSqrtPriceX96();
+  const Q192 = 2n ** 192n;
+  const out = (await tokenIsPoolToken0())
+    ? ethWei * Q192 / (sqrtPriceX96 * sqrtPriceX96)
+    : ethWei * (sqrtPriceX96 * sqrtPriceX96) / Q192;
+  return out * (1_000_000n - BigInt(UNI_POOL_FEE)) / 1_000_000n;
+}
+
+/**
+ * Quote Uniswap V3: TOKEN → ETH (sell). Mirror of the buy.
  */
 async function quoteUniSell(gblinWei: bigint): Promise<bigint> {
-  const slot0 = await publicClient.readContract({
-    address: UNI_POOL,
-    abi:     UNI_POOL_SLOT0_ABI,
-    functionName: "slot0",
-  });
-  const sqrtPriceX96 = slot0[0];
+  const sqrtPriceX96 = await poolSqrtPriceX96();
   const Q192 = 2n ** 192n;
-  return (gblinWei * (sqrtPriceX96 * sqrtPriceX96) / Q192) *
-    (1_000_000n - BigInt(UNI_POOL_FEE)) / 1_000_000n;
+  const out = (await tokenIsPoolToken0())
+    ? gblinWei * (sqrtPriceX96 * sqrtPriceX96) / Q192
+    : gblinWei * Q192 / (sqrtPriceX96 * sqrtPriceX96);
+  return out * (1_000_000n - BigInt(UNI_POOL_FEE)) / 1_000_000n;
 }
 
 const AERO_ROUTE_BUY  = [{ from: WETH_ADDRESS,  to: TOKEN_ADDRESS, stable: false, factory: AERO_FACTORY }] as const;

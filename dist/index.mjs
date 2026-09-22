@@ -51605,25 +51605,40 @@ async function getEthBalanceAtBlockSafe(address, blockNumber) {
     return 0n;
   }
 }
-async function quoteUniBuy(ethWei) {
+var UNI_POOL_TOKEN0_ABI = [
+  { name: "token0", type: "function", stateMutability: "view", inputs: [], outputs: [{ name: "", type: "address" }] }
+];
+var tokenIsToken0 = null;
+async function tokenIsPoolToken0() {
+  if (tokenIsToken0 === null) {
+    const t0 = await publicClient.readContract({
+      address: UNI_POOL,
+      abi: UNI_POOL_TOKEN0_ABI,
+      functionName: "token0"
+    });
+    tokenIsToken0 = t0.toLowerCase() === TOKEN_ADDRESS.toLowerCase();
+  }
+  return tokenIsToken0;
+}
+async function poolSqrtPriceX96() {
   const slot0 = await publicClient.readContract({
     address: UNI_POOL,
     abi: UNI_POOL_SLOT0_ABI,
     functionName: "slot0"
   });
-  const sqrtPriceX96 = slot0[0];
+  return slot0[0];
+}
+async function quoteUniBuy(ethWei) {
+  const sqrtPriceX96 = await poolSqrtPriceX96();
   const Q192 = 2n ** 192n;
-  return ethWei * Q192 / (sqrtPriceX96 * sqrtPriceX96) * (1000000n - BigInt(UNI_POOL_FEE)) / 1000000n;
+  const out = await tokenIsPoolToken0() ? ethWei * Q192 / (sqrtPriceX96 * sqrtPriceX96) : ethWei * (sqrtPriceX96 * sqrtPriceX96) / Q192;
+  return out * (1000000n - BigInt(UNI_POOL_FEE)) / 1000000n;
 }
 async function quoteUniSell(gblinWei) {
-  const slot0 = await publicClient.readContract({
-    address: UNI_POOL,
-    abi: UNI_POOL_SLOT0_ABI,
-    functionName: "slot0"
-  });
-  const sqrtPriceX96 = slot0[0];
+  const sqrtPriceX96 = await poolSqrtPriceX96();
   const Q192 = 2n ** 192n;
-  return gblinWei * (sqrtPriceX96 * sqrtPriceX96) / Q192 * (1000000n - BigInt(UNI_POOL_FEE)) / 1000000n;
+  const out = await tokenIsPoolToken0() ? gblinWei * (sqrtPriceX96 * sqrtPriceX96) / Q192 : gblinWei * Q192 / (sqrtPriceX96 * sqrtPriceX96);
+  return out * (1000000n - BigInt(UNI_POOL_FEE)) / 1000000n;
 }
 var AERO_ROUTE_BUY = [{ from: WETH_ADDRESS, to: TOKEN_ADDRESS, stable: false, factory: AERO_FACTORY }];
 var AERO_ROUTE_SELL = [{ from: TOKEN_ADDRESS, to: WETH_ADDRESS, stable: false, factory: AERO_FACTORY }];
