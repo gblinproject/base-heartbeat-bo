@@ -50804,6 +50804,9 @@ async function distributeFunds(ethPriceUsd) {
     { source: `W${primary.index}`, distributable: distributable.toFixed(6), primaryBalance: primaryBalance.toFixed(6) },
     "Adaptive fund distribution across wallets..."
   );
+  // Il numero di sequenza lo teniamo noi: richiederlo al nodo fra un invio e l'altro restituisce un valore
+  // non ancora aggiornato, e il secondo trasferimento esce con lo stesso numero ("replacement underpriced").
+  let nextNonce = await publicClient.getTransactionCount({ address: primary.address, blockTag: "pending" });
   for (const { w: target, bal: targetBalance } of others) {
     if (targetBalance * ethPriceUsd >= 2) continue;
     const proportion = (WALLET_WEIGHTS[target.index] ?? 0.25) / weightSum;
@@ -50812,8 +50815,10 @@ async function distributeFunds(ethPriceUsd) {
     try {
       const hash3 = await primary.walletClient.sendTransaction({
         to: target.address,
-        value: parseEther(send.toFixed(18))
+        value: parseEther(send.toFixed(18)),
+        nonce: nextNonce
       });
+      nextNonce++;
       await publicClient.waitForTransactionReceipt({ hash: hash3 });
       logger.info({ to: target.address, amount: send.toFixed(6), weight: proportion.toFixed(2) }, "Funds distributed (adaptive)");
     } catch (err) {
