@@ -19,14 +19,14 @@ import { fileURLToPath } from "url";
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 // GBLIN V6 (contratto di produzione). V5 era 0x38DcDB3A381677239BBc652aed9811F2f8496345.
-const TOKEN_ADDRESS = "0x36C81d7E1966310F305eA637e761Cf77F90852f0" as `0x${string}`;
+const TOKEN_ADDRESS = "0xc2181d975c05c8c724b334bcED0764c0b86B1D53" as `0x${string}`;
 const WETH_ADDRESS  = "0x4200000000000000000000000000000000000006" as `0x${string}`;
 
 /** Uniswap V3 SwapRouter on Base — used for both BUY and SELL */
 const UNI_ROUTER  = "0x2626664c2603336E57B271c5C0b26F421741e481" as `0x${string}`;
 
 /** Uniswap V3 GBLIN(V6)/WETH pool on Base — fee 0.3%. (V5 era 0x8fdda852...561617, fee 300) */
-const UNI_POOL     = "0xAb305c45F4E42A73909a49a6775e3f7782239dAE" as `0x${string}`;
+const UNI_POOL     = "0x779C4260022bf7493d303Ff016C3C63215ee9B19" as `0x${string}`;
 const UNI_POOL_FEE = 3000; // 0.3% (tier scelto per la pool V6)
 
 /** Aerodrome V1 volatile pool: GBLIN(V6)/WETH. (V5 era 0x7dcd4f5b...92ae1b) */
@@ -497,7 +497,7 @@ function getForcedBuyVenue(): "uniswap" | "aerodrome" | null {
   refreshForcedBuySlots();
   const now = Date.now();
   if (!uniswapForcedBuyDoneToday   && now >= uniswapForcedBuyTimeMs)   return "uniswap";
-  if (!aerodromeForcedBuyDoneToday && now >= aerodromeForcedBuyTimeMs) return "aerodrome";
+  // Aerodrome: nessuna pool sul vault in servizio, la rotazione non la forza piu'.
   return null;
 }
 
@@ -1030,8 +1030,8 @@ async function findBestBuyVenue(ethWei: bigint, excludeGblin = false): Promise<Q
 
   const results: QuoteResult[] = [];
   if (uni.status   === "fulfilled") results.push(uni.value);
-  if (aero.status  === "fulfilled") results.push(aero.value);
-  if (!excludeGblin && gblin?.status === "fulfilled") results.push((gblin as PromiseFulfilledResult<QuoteResult>).value);
+  // Aerodrome escluso: nessuna pool sul vault in servizio.
+  // Percorso sul contratto escluso: sul vault in servizio i preventivi stanno sulla Lens e l'uscita in ETH sullo Zap.
 
   if (results.length === 0) throw new Error("All buy venues failed to quote");
 
@@ -1061,8 +1061,8 @@ async function findBestSellVenue(gblinWei: bigint, walletIndex?: number): Promis
 
   const results: QuoteResult[] = [];
   if (uni.status   === "fulfilled") results.push(uni.value);
-  if (aero.status  === "fulfilled") results.push(aero.value);
-  if (!gblinLocked && gblin?.status === "fulfilled") results.push((gblin as PromiseFulfilledResult<QuoteResult>).value);
+  // Aerodrome escluso: nessuna pool sul vault in servizio.
+  // Percorso sul contratto escluso: vedi sopra.
 
   if (results.length === 0) throw new Error("All sell venues failed to quote");
 
@@ -1750,7 +1750,9 @@ async function bestExecutionBuy(
   // best-execution would essentially never route here. Force exactly one direct
   // contract buy per day, at the randomized unlock slot, so on-chain `Minted`
   // activity never stalls (keeps the "contract (buy)" stream alive).
-  if (isGblinContractBuyAllowed() && ethWei >= GBLIN_MIN_ETH_WEI) {
+  // Conio diretto sospeso sul vault in servizio: la sua quotazione vive sulla Lens e l'uscita in ETH
+  // sullo Zap, superfici che il bot non conosce ancora. Riaprirlo quando saranno collegate.
+  if (false && isGblinContractBuyAllowed() && ethWei >= GBLIN_MIN_ETH_WEI) {
     logger.info("Daily forced-buy: GBLIN contract (NAV mint) — keeping direct on-chain buys alive");
     const forced = await executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, manual);
     if (forced.success) return forced;
@@ -1762,9 +1764,9 @@ async function bestExecutionBuy(
   const best = await findBestBuyVenue(ethWei, !gblinAllowed).catch(() => null);
   if (!best) {
     // All quotes failed — fall back to Aerodrome with same amounts
-    logger.warn("All buy quotes failed – falling back to Aerodrome");
-    const record = await executeBuyAerodrome(wallet, ethPriceUsd, true, ethWei, usdAmount);
-    if (record.success) recordVenueBuyUsed("aerodrome");
+    logger.warn("All buy quotes failed – retrying on Uniswap");
+    const record = await executeBuy(wallet, ethPriceUsd, true, ethWei, usdAmount);
+    if (record.success) recordVenueBuyUsed("uniswap");
     return record;
   }
 
@@ -2618,7 +2620,7 @@ export async function startBot() {
         network:       "Base Mainnet",
         threshold:     `$${FUNDED_THRESHOLD_USD}`,
         token:         TOKEN_ADDRESS,
-        uniPool:       "0xAb305c45F4E42A73909a49a6775e3f7782239dAE",
+        uniPool:       "0x779C4260022bf7493d303Ff016C3C63215ee9B19",
         aeroPool:      AERO_POOL,
         uniRouter:     UNI_ROUTER,
         aeroRouter:    AERO_ROUTER,

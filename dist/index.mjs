@@ -50946,10 +50946,10 @@ async function sendTradeAlert(alert) {
 import { readFileSync as readFileSync2, writeFileSync as writeFileSync2, existsSync as existsSync2 } from "fs";
 import { resolve as resolve2 } from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
-var TOKEN_ADDRESS = "0x36C81d7E1966310F305eA637e761Cf77F90852f0";
+var TOKEN_ADDRESS = "0xc2181d975c05c8c724b334bcED0764c0b86B1D53";
 var WETH_ADDRESS = "0x4200000000000000000000000000000000000006";
 var UNI_ROUTER = "0x2626664c2603336E57B271c5C0b26F421741e481";
-var UNI_POOL = "0xAb305c45F4E42A73909a49a6775e3f7782239dAE";
+var UNI_POOL = "0x779C4260022bf7493d303Ff016C3C63215ee9B19";
 var UNI_POOL_FEE = 3000;
 var AERO_ROUTER = "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43";
 var AERO_FACTORY = "0x420DD381b31aEf6683db6B902084cB0FFECe40Da";
@@ -51282,7 +51282,7 @@ function getForcedBuyVenue() {
   refreshForcedBuySlots();
   const now = Date.now();
   if (!uniswapForcedBuyDoneToday && now >= uniswapForcedBuyTimeMs) return "uniswap";
-  if (!aerodromeForcedBuyDoneToday && now >= aerodromeForcedBuyTimeMs) return "aerodrome";
+  // Aerodrome: nessuna pool sul vault in servizio, la rotazione non la forza piu'.
   return null;
 }
 function recordVenueBuyUsed(venue) {
@@ -51657,8 +51657,8 @@ async function findBestBuyVenue(ethWei, excludeGblin = false) {
   ]);
   const results = [];
   if (uni.status === "fulfilled") results.push(uni.value);
-  if (aero.status === "fulfilled") results.push(aero.value);
-  if (!excludeGblin && gblin?.status === "fulfilled") results.push(gblin.value);
+  // Aerodrome escluso: nessuna pool sul vault in servizio.
+  // Percorso sul contratto escluso: sul vault in servizio i preventivi stanno sulla Lens e l'uscita in ETH sullo Zap.
   if (results.length === 0) throw new Error("All buy venues failed to quote");
   results.sort((a, b) => b.amountOut > a.amountOut ? 1 : -1);
   logger.info(
@@ -51680,8 +51680,8 @@ async function findBestSellVenue(gblinWei, walletIndex) {
   ]);
   const results = [];
   if (uni.status === "fulfilled") results.push(uni.value);
-  if (aero.status === "fulfilled") results.push(aero.value);
-  if (!gblinLocked && gblin?.status === "fulfilled") results.push(gblin.value);
+  // Aerodrome escluso: nessuna pool sul vault in servizio.
+  // Percorso sul contratto escluso: vedi sopra.
   if (results.length === 0) throw new Error("All sell venues failed to quote");
   results.sort((a, b) => b.amountOut > a.amountOut ? 1 : -1);
   logger.info(
@@ -52241,9 +52241,9 @@ async function bestExecutionBuy(wallet, ethPriceUsd, manual = false) {
   const gblinAllowed = isGblinContractBuyAllowed();
   const best = await findBestBuyVenue(ethWei, !gblinAllowed).catch(() => null);
   if (!best) {
-    logger.warn("All buy quotes failed \u2013 falling back to Aerodrome");
-    const record2 = await executeBuyAerodrome(wallet, ethPriceUsd, true, ethWei, usdAmount);
-    if (record2.success) recordVenueBuyUsed("aerodrome");
+    logger.warn("All buy quotes failed \u2013 retrying on Uniswap");
+    const record2 = await executeBuy(wallet, ethPriceUsd, true, ethWei, usdAmount);
+    if (record2.success) recordVenueBuyUsed("uniswap");
     return record2;
   }
   if (best.venue === "uniswap") {
