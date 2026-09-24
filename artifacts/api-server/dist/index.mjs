@@ -52622,49 +52622,49 @@ router2.get("/bot/metrics", (_req, res) => {
 });
 function guardRunning(res) {
   if (getBotState().status !== "running") {
-    res.status(400).json({ error: "Bot non ancora avviato (wallet non finanziato)" });
+    res.status(400).json({ error: "Bot not started yet (wallets not funded)" });
     return false;
   }
   return true;
 }
 router2.post("/bot/buy-now", (_req, res) => {
   if (!guardRunning(res)) return;
-  res.json({ message: "BUY avviato (DEX casuale) \u2014 controlla /api/bot/status tra qualche secondo" });
+  res.json({ message: "BUY started (random venue) \u2014 check /api/bot/status in a few seconds" });
   triggerBuyNow();
 });
 router2.post("/bot/sell-now", (_req, res) => {
   if (!guardRunning(res)) return;
-  res.json({ message: "SELL avviato (DEX casuale) \u2014 controlla /api/bot/status tra qualche secondo" });
+  res.json({ message: "SELL started (random venue) \u2014 check /api/bot/status in a few seconds" });
   triggerSellNow();
 });
 router2.post("/bot/buy-uniswap", (_req, res) => {
   if (!guardRunning(res)) return;
-  res.json({ message: "BUY forzato su Uniswap V3 \u2014 controlla /api/bot/status tra qualche secondo" });
+  res.json({ message: "BUY forced on Uniswap V3 \u2014 check /api/bot/status in a few seconds" });
   triggerBuyUniswap();
 });
 router2.post("/bot/buy-aerodrome", (_req, res) => {
   if (!guardRunning(res)) return;
-  res.json({ message: "BUY forzato su Aerodrome V1 \u2014 controlla /api/bot/status tra qualche secondo" });
+  res.json({ message: "BUY forced on Aerodrome V1 \u2014 check /api/bot/status in a few seconds" });
   triggerBuyAerodrome();
 });
 router2.post("/bot/sell-uniswap", (_req, res) => {
   if (!guardRunning(res)) return;
-  res.json({ message: "SELL forzato su Uniswap V3 \u2014 controlla /api/bot/status tra qualche secondo" });
+  res.json({ message: "SELL forced on Uniswap V3 \u2014 check /api/bot/status in a few seconds" });
   triggerSellUniswap();
 });
 router2.post("/bot/sell-aerodrome", (_req, res) => {
   if (!guardRunning(res)) return;
-  res.json({ message: "SELL forzato su Aerodrome V1 \u2014 controlla /api/bot/status tra qualche secondo" });
+  res.json({ message: "SELL forced on Aerodrome V1 \u2014 check /api/bot/status in a few seconds" });
   triggerSellAerodrome();
 });
 router2.post("/bot/buy-gblin", (_req, res) => {
   if (!guardRunning(res)) return;
-  res.json({ message: "BUY forzato su contratto GBLIN \u2014 controlla /api/bot/status tra qualche secondo" });
+  res.json({ message: "BUY forced on the GBLIN contract \u2014 check /api/bot/status in a few seconds" });
   triggerBuyGblinContract();
 });
 router2.post("/bot/sell-gblin", (_req, res) => {
   if (!guardRunning(res)) return;
-  res.json({ message: "SELL forzato su contratto GBLIN \u2014 controlla /api/bot/status tra qualche secondo" });
+  res.json({ message: "SELL forced on the GBLIN contract \u2014 check /api/bot/status in a few seconds" });
   triggerSellGblinContract();
 });
 router2.post("/bot/sell-all", async (_req, res) => {

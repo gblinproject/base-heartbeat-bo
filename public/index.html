@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="it">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -53,13 +53,13 @@
     <div class="card"><div class="card-title">Stato</div><div class="card-value" id="stat-status">—</div></div>
     <div class="card"><div class="card-title">Capitale totale</div><div class="card-value" id="stat-usd">—</div><div class="card-sub" id="stat-eth"></div></div>
     <div class="card"><div class="card-title">Prossimo trade</div><div class="card-value" id="stat-next">—</div><div class="card-sub" id="stat-zone"></div></div>
-    <div class="card"><div class="card-title">Ultimo trade</div><div class="card-value" id="stat-last">—</div><div class="card-sub" id="stat-lastsub"></div></div>
+    <div class="card"><div class="card-title">Last trade</div><div class="card-value" id="stat-last">—</div><div class="card-sub" id="stat-lastsub"></div></div>
   </div>
 
   <div class="wallets" id="wallets"></div>
 
   <div class="trades" id="shield-panel" style="margin-bottom:24px">
-    <div class="trades-title">Crash-Shield Keeper · movimenti sul contratto V6</div>
+    <div class="trades-title">Crash-Shield Keeper · contract activity</div>
     <div id="shield-body"><div style="color:#4b5563;font-size:0.75rem">caricamento...</div></div>
   </div>
 
@@ -161,13 +161,13 @@
           shEl.innerHTML =
             '<div class="trade-row">' +
               '<div class="trade-left"><span class="dex-badge dex-gblin">refreshWeights</span></div>' +
-              '<div class="trade-mid">' + (sh.lastRefreshAt ? 'ultimo ' + fmt(sh.lastRefreshAt) : 'in attesa · gira ogni ora') +
+              '<div class="trade-mid">' + (sh.lastRefreshAt ? 'last ' + fmt(sh.lastRefreshAt) : 'waiting · runs hourly') +
                 '  ·  ' + (sh.refreshCount ?? 0) + ' totali</div>' +
               '<div class="trade-right">' + txLink(sh.lastRefreshTx) + '</div>' +
             '</div>' +
             '<div class="trade-row">' +
               '<div class="trade-left"><span class="dex-badge dex-aero">rebalance</span></div>' +
-              '<div class="trade-mid">' + (sh.lastRebalanceAt ? 'ultimo ' + fmt(sh.lastRebalanceAt) : 'solo se serve · check giornaliero') + '</div>' +
+              '<div class="trade-mid">' + (sh.lastRebalanceAt ? 'last ' + fmt(sh.lastRebalanceAt) : 'only when needed · daily check') + '</div>' +
               '<div class="trade-right">' + txLink(sh.lastRebalanceTx) + '</div>' +
             '</div>';
         }
@@ -175,7 +175,7 @@
         const allTrades = s.recentTrades ?? [];
         const trades = allTrades.filter(t => t.success === true).slice(0, 10);
         document.getElementById('trade-list').innerHTML = trades.length === 0
-          ? '<div style="color:#4b5563;font-size:0.75rem">Nessun trade ancora</div>'
+          ? '<div style="color:#4b5563;font-size:0.75rem">No trades yet</div>'
           : trades.map(t => {
               const cls  = t.type === 'buy' ? 'buy' : 'sell';
               const w    = 'W' + (t.walletIndex ?? '?');

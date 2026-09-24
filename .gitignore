@@ -1,9 +1,10 @@
 wallet-data.json
+daily-contract-counters.json
 *.env
 .env*
 node_modules/
 .DS_Store
 *.bak.*
 
-# graphify (knowledge graph locale, non versionato)
+# graphify (local knowledge graph, not versioned)
 graphify-out/

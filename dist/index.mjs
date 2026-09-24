@@ -50738,6 +50738,7 @@ var logger = (0, import_pino.default)({
 // src/services/wallet.ts
 var __dirname2 = dirname(fileURLToPath(import.meta.url));
 var WALLET_DATA_PATH = resolve(__dirname2, "../wallet-data.json");
+var DAILY_COUNTERS_PATH = resolve(__dirname2, "../daily-contract-counters.json");
 var BASE_RPC = process.env.RPC_URL || process.env.BASE_RPC_URL || "https://mainnet.base.org";
 var NUM_WALLETS = 4;
 var WALLET_WEIGHTS = [0.35, 0.3, 0.2, 0.15];
@@ -50804,8 +50805,8 @@ async function distributeFunds(ethPriceUsd) {
     { source: `W${primary.index}`, distributable: distributable.toFixed(6), primaryBalance: primaryBalance.toFixed(6) },
     "Adaptive fund distribution across wallets..."
   );
-  // Il numero di sequenza lo teniamo noi: richiederlo al nodo fra un invio e l'altro restituisce un valore
-  // non ancora aggiornato, e il secondo trasferimento esce con lo stesso numero ("replacement underpriced").
+  // The nonce is tracked locally: asking the node between two sends returns a value
+  // that is not yet updated, and the second transfer goes out with the same nonce ("replacement underpriced").
   let nextNonce = await publicClient.getTransactionCount({ address: primary.address, blockTag: "pending" });
   for (const { w: target, bal: targetBalance } of others) {
     if (targetBalance * ethPriceUsd >= 2) continue;
@@ -50957,7 +50958,7 @@ var UNI_ROUTER = "0x2626664c2603336E57B271c5C0b26F421741e481";
 var UNI_POOL = "0x779C4260022bf7493d303Ff016C3C63215ee9B19";
 var UNI_POOL_FEE = 3000;
 
-// Superfici del vault in servizio: i preventivi vivono sulla Lens, l'uscita in ETH sullo Zap.
+// Vault surfaces: quotes come from the Lens, the ETH exit goes through the Zap.
 var LENS_ADDRESS = "0xfCFea8027019E8551A1f09AD91532471F5D26f61";
 var ZAP_ADDRESS = "0x0E9D6Ceb6D313b021622C121Cda9C62e86e60200";
 var LENS_ABI = [
@@ -50967,9 +50968,9 @@ var LENS_ABI = [
 var ZAP_ABI = [
   { name: "sellGBLINForEth", type: "function", stateMutability: "nonpayable", inputs: [{ name: "shares", type: "uint256" }, { name: "minEthOut", type: "uint256" }, { name: "venueData", type: "bytes[]" }, { name: "receiver", type: "address" }], outputs: [{ name: "ethOut", type: "uint256" }] }
 ];
-// Una voce per riga del paniere: il livello di commissione della pool su cui lo Zap vende quella gamba.
+// One entry per basket row: the fee tier of the pool the Zap sells that leg on.
 var ZAP_VENUE_DATA = ["0x00000000000000000000000000000000000000000000000000000000000001f4", "0x00000000000000000000000000000000000000000000000000000000000001f4", "0x00000000000000000000000000000000000000000000000000000000000001f4"];
-// L'uscita consuma circa 810.000 di gas ma pretende un limite piu' alto per la riserva dei trasferimenti.
+// The exit uses about 810,000 gas but needs a higher limit for the vault's transfer gas reserve.
 var ZAP_EXIT_GAS = 1300000n;
 var AERO_ROUTER = "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43";
 var AERO_FACTORY = "0x420DD381b31aEf6683db6B902084cB0FFECe40Da";
@@ -50982,7 +50983,8 @@ var POLLING_INTERVAL_MS = 60 * 1e3;
 var SELL_COOLDOWN_MS = 45 * 60 * 1e3;
 var POOL_PREFERENCE_BPS = Number(process.env.POOL_PREFERENCE_BPS ?? 100);
 var GBLIN_MIN_ETH_WEI = parseEther("0.0005");
-var GBLIN_CONTRACT_DAILY_BUY_LIMIT = 5;
+var GBLIN_CONTRACT_DAILY_BUY_LIMIT = Number(process.env.GBLIN_CONTRACT_DAILY_BUY_LIMIT ?? 1);
+var GBLIN_CONTRACT_DAILY_SELL_LIMIT = Number(process.env.GBLIN_CONTRACT_DAILY_SELL_LIMIT ?? 2);
 var BUY_PRESETS = [
   { amount: 0.5, weight: 0.15 },
   { amount: 0.75, weight: 0.25 },
@@ -51303,7 +51305,7 @@ function getForcedBuyVenue() {
   refreshForcedBuySlots();
   const now = Date.now();
   if (!uniswapForcedBuyDoneToday && now >= uniswapForcedBuyTimeMs) return "uniswap";
-  // Aerodrome: nessuna pool sul vault in servizio, la rotazione non la forza piu'.
+  // Aerodrome: no pool for the vault in service, so the rotation no longer forces it.
   return null;
 }
 function recordVenueBuyUsed(venue) {
@@ -51313,13 +51315,41 @@ function recordVenueBuyUsed(venue) {
 function getUtcDateKey() {
   return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
 }
+// Daily counters of contract buys and sells, kept on disk so that a restart does not reset them.
+var gblinContractSellCountToday = 0;
+function loadDailyCounters(today) {
+  try {
+    const d = JSON.parse(readFileSync(DAILY_COUNTERS_PATH, "utf8"));
+    if (d && d.day === today) return { buys: Number(d.buys) || 0, sells: Number(d.sells) || 0 };
+  } catch {
+  }
+  return { buys: 0, sells: 0 };
+}
+function saveDailyCounters() {
+  try {
+    writeFileSync(DAILY_COUNTERS_PATH, JSON.stringify({ day: gblinContractBuyDayKey, buys: gblinContractBuyCountToday, sells: gblinContractSellCountToday }), "utf8");
+  } catch (err) {
+    logger.warn({ err }, "Could not persist the daily contract counters");
+  }
+}
 function refreshGblinDailySlot() {
   const today = getUtcDateKey();
   if (gblinContractBuyDayKey !== today) {
-    gblinContractBuyCountToday = 0;
+    const c = loadDailyCounters(today);
+    gblinContractBuyCountToday = c.buys;
+    gblinContractSellCountToday = c.sells;
     gblinContractBuyDayKey = today;
-    logger.info({ date: today, limit: GBLIN_CONTRACT_DAILY_BUY_LIMIT }, "Daily GBLIN contract buy counter reset");
+    logger.info({ date: today, buys: c.buys, sells: c.sells, buyLimit: GBLIN_CONTRACT_DAILY_BUY_LIMIT, sellLimit: GBLIN_CONTRACT_DAILY_SELL_LIMIT }, "Daily GBLIN contract counters loaded");
   }
+}
+function isGblinContractSellAllowed() {
+  refreshGblinDailySlot();
+  return gblinContractSellCountToday < GBLIN_CONTRACT_DAILY_SELL_LIMIT;
+}
+function recordGblinContractSellUsed() {
+  refreshGblinDailySlot();
+  gblinContractSellCountToday++;
+  saveDailyCounters();
 }
 function isGblinContractBuyAllowed() {
   refreshGblinDailySlot();
@@ -51328,6 +51358,7 @@ function isGblinContractBuyAllowed() {
 function recordGblinContractBuyUsed() {
   refreshGblinDailySlot();
   gblinContractBuyCountToday++;
+  saveDailyCounters();
 }
 var consecutiveBuys = /* @__PURE__ */ new Map();
 var walletRebalanceThreshold = /* @__PURE__ */ new Map();
@@ -51692,7 +51723,7 @@ async function findBestBuyVenue(ethWei, excludeGblin = false) {
   ]);
   const results = [];
   if (uni.status === "fulfilled") results.push(uni.value);
-  // Aerodrome escluso: nessuna pool sul vault in servizio.
+  // Aerodrome excluded: no pool for the vault in service.
   if (!excludeGblin && gblin?.status === "fulfilled") results.push(gblin.value);
   if (results.length === 0) throw new Error("All buy venues failed to quote");
   results.sort((a, b) => b.amountOut > a.amountOut ? 1 : -1);
@@ -51703,7 +51734,11 @@ async function findBestBuyVenue(ethWei, excludeGblin = false) {
   return results[0];
 }
 async function findBestSellVenue(gblinWei, walletIndex) {
-  const gblinLocked = walletIndex !== void 0 && Date.now() - (lastGblinBuyTimestamp.get(walletIndex) ?? 0) < GBLIN_SELL_LOCK_MS;
+  const sellCapReached = !isGblinContractSellAllowed();
+  if (sellCapReached) {
+    logger.info({ sellsToday: gblinContractSellCountToday, limit: GBLIN_CONTRACT_DAILY_SELL_LIMIT }, "GBLIN contract daily sell limit reached \u2013 quoting the pool only");
+  }
+  const gblinLocked = sellCapReached || walletIndex !== void 0 && Date.now() - (lastGblinBuyTimestamp.get(walletIndex) ?? 0) < GBLIN_SELL_LOCK_MS;
   if (gblinLocked) {
     const secsLeft = Math.ceil((GBLIN_SELL_LOCK_MS - (Date.now() - (lastGblinBuyTimestamp.get(walletIndex) ?? 0))) / 1e3);
     logger.info({ walletIndex, secsLeft }, "GBLIN sell lock active \u2013 excluding GBLIN from sell venues");
@@ -51715,7 +51750,7 @@ async function findBestSellVenue(gblinWei, walletIndex) {
   ]);
   const results = [];
   if (uni.status === "fulfilled") results.push(uni.value);
-  // Aerodrome escluso: nessuna pool sul vault in servizio.
+  // Aerodrome excluded: no pool for the vault in service.
   if (!gblinLocked && gblin?.status === "fulfilled") results.push(gblin.value);
   if (results.length === 0) throw new Error("All sell venues failed to quote");
   results.sort((a, b) => b.amountOut > a.amountOut ? 1 : -1);
@@ -52226,10 +52261,11 @@ async function executeSellGblinContract(wallet, ethPriceUsd, sellAmount, manual 
     record.ethAmount = ethReceived;
     record.usdAmount = ethReceived * ethPriceUsd;
     record.success = true;
+    recordGblinContractSellUsed();
     lastSellTimestamp.set(wallet.index, Date.now());
     consecutiveBuys.set(wallet.index, 0);
     rollRebalanceThreshold(wallet.index);
-    logger.info({ swapHash, tokensSold: record.tokenAmount, dex: "GBLIN contract" }, "SELL GBLIN contract confirmed \u2705");
+    logger.info({ swapHash, tokensSold: record.tokenAmount, dex: "GBLIN contract", gblinSellsToday: gblinContractSellCountToday }, "SELL GBLIN contract confirmed \u2705");
   } catch (err) {
     record.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
     logger.error({ err }, "SELL GBLIN contract failed");
@@ -52280,13 +52316,13 @@ async function bestExecutionBuy(wallet, ethPriceUsd, manual = false) {
       return record2;
     }
   }
-  // Un acquisto al giorno deve passare dal contratto: il conio avviene al valore patrimoniale netto e la
-  // pool tratta quasi sempre sotto, quindi la sola miglior esecuzione non ci arriverebbe mai.
+  // One buy a day goes through the contract: it mints at net asset value while the
+  // pool usually trades below it, so best execution alone would never pick it.
   if (isGblinContractBuyAllowed()) {
-    logger.info("Acquisto giornaliero garantito sul contratto (conio al NAV)");
+    logger.info("Daily contract buy (mint at NAV)");
     const forced = await executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, manual);
     if (forced.success) return forced;
-    logger.warn("Acquisto sul contratto fallito: si prosegue con la miglior esecuzione, lo slot resta aperto per oggi");
+    logger.warn("Contract buy failed: falling back to best execution, the daily slot stays open");
   }
   const gblinAllowed = isGblinContractBuyAllowed();
   const best = await findBestBuyVenue(ethWei, !gblinAllowed).catch(() => null);
@@ -52529,7 +52565,7 @@ function refreshGblinSellSlot() {
 
 function isGblinContractSellDue() {
   refreshGblinSellSlot();
-  return !gblinContractSellDoneToday && Date.now() >= gblinContractSellUnlockMs;
+  return !gblinContractSellDoneToday && Date.now() >= gblinContractSellUnlockMs && isGblinContractSellAllowed();
 }
 
 function findEmergencySellWallet(ethPriceUsd) {
@@ -52699,15 +52735,15 @@ function notifyLowPool(totalUsd) {
   if (now - lowPoolLastAlert < LOW_POOL_REALERT_MS) return;
   lowPoolLastAlert = now;
   notifyTelegram(
-    `\u23f8 <b>Bot in pausa \u2014 fondi sotto la soglia</b>\n` +
-    `Totale dei 4 wallet: <b>$${totalUsd.toFixed(2)}</b> (serve $${FUNDED_THRESHOLD_USD})\n` +
-    `Ricarica ETH su Base su un wallet qualsiasi: riparte da solo entro un minuto.`
+    `\u23f8 <b>Bot paused \u2014 funds below threshold</b>\n` +
+    `Total of the 4 wallets: <b>$${totalUsd.toFixed(2)}</b> (needs $${FUNDED_THRESHOLD_USD})\n` +
+    `Top up ETH on Base on any wallet: it restarts by itself within a minute.`
   ).catch(() => {});
 }
 function notifyPoolRecovered(totalUsd) {
   if (!lowPoolLastAlert) return;
   lowPoolLastAlert = 0;
-  notifyTelegram(`\u25b6\ufe0f <b>Bot ripartito</b>\nTotale dei 4 wallet: <b>$${totalUsd.toFixed(2)}</b>.`).catch(() => {});
+  notifyTelegram(`\u25b6\ufe0f <b>Bot ripartito</b>\nTotal of the 4 wallets: <b>$${totalUsd.toFixed(2)}</b>.`).catch(() => {});
 }
 function checkLowEth(wallets) {
   const now = Date.now();
@@ -52717,10 +52753,10 @@ function checkLowEth(wallets) {
       if (last === 0 || now - last >= LOW_ETH_REALERT_MS) {
         lowEthLastAlert.set(w.index, now);
         notifyTelegram(
-          `\u26a0\ufe0f <b>ETH basso \u2014 Heartbeat Bot (Base)</b>\n` +
+          `\u26a0\ufe0f <b>Low ETH \u2014 Heartbeat Bot (Base)</b>\n` +
           `Wallet W${w.index} <code>${w.address.slice(0, 12)}\u2026</code>\n` +
-          `Saldo: <b>${w.ethBalance.toFixed(6)} ETH</b> (soglia ${LOW_ETH_ALERT_ETH})\n` +
-          `Ricarica ETH su Base: senza gas si fermano trade e keeper crash-shield.`
+          `Balance: <b>${w.ethBalance.toFixed(6)} ETH</b> (threshold ${LOW_ETH_ALERT_ETH})\n` +
+          `Top up ETH on Base: without gas, trades stop.`
         ).catch(() => {});
       }
     } else if (w.ethBalance >= LOW_ETH_ALERT_ETH * 1.5) {
@@ -53055,9 +53091,9 @@ async function maybeDailyRebalance() {
   }
 }
 function startShieldKeeper() {
-  // Spento sul vault in servizio: lo scudo si aggiorna dentro conii, riscatti e riempimenti d'asta,
-  // e il ribilanciamento lo fa l'asta olandese con i suoi offerenti. Il bot non lo tocca piu'.
-  logger.info("Crash-shield keeper disattivato: sul vault in servizio ribilancia l'asta");
+  // Off for the vault in service: the shield updates inside mints, redemptions and auction fills,
+  // and rebalancing is done by the Dutch auction and its bidders. The bot no longer touches it.
+  logger.info("Crash-shield keeper disabled: the auction rebalances the vault in service");
 }
 function getBotState() {
   return { ...state };
@@ -53310,7 +53346,7 @@ router2.get("/bot/metrics", (_req, res) => {
 });
 function guardRunning(res) {
   if (getBotState().status !== "running") {
-    res.status(400).json({ error: "Bot non ancora avviato (wallet non finanziato)" });
+    res.status(400).json({ error: "Bot not started yet (wallets not funded)" });
     return false;
   }
   return true;
@@ -53333,42 +53369,42 @@ router2.use((req, res, next) => {
 });
 router2.post("/bot/buy-now", (_req, res) => {
   if (!guardRunning(res)) return;
-  res.json({ message: "BUY avviato (DEX casuale) \u2014 controlla /api/bot/status tra qualche secondo" });
+  res.json({ message: "BUY started (random venue) \u2014 check /api/bot/status in a few seconds" });
   triggerBuyNow();
 });
 router2.post("/bot/sell-now", (_req, res) => {
   if (!guardRunning(res)) return;
-  res.json({ message: "SELL avviato (DEX casuale) \u2014 controlla /api/bot/status tra qualche secondo" });
+  res.json({ message: "SELL started (random venue) \u2014 check /api/bot/status in a few seconds" });
   triggerSellNow();
 });
 router2.post("/bot/buy-uniswap", (_req, res) => {
   if (!guardRunning(res)) return;
-  res.json({ message: "BUY forzato su Uniswap V3 \u2014 controlla /api/bot/status tra qualche secondo" });
+  res.json({ message: "BUY forced on Uniswap V3 \u2014 check /api/bot/status in a few seconds" });
   triggerBuyUniswap();
 });
 router2.post("/bot/buy-aerodrome", (_req, res) => {
   if (!guardRunning(res)) return;
-  res.json({ message: "BUY forzato su Aerodrome V1 \u2014 controlla /api/bot/status tra qualche secondo" });
+  res.json({ message: "BUY forced on Aerodrome V1 \u2014 check /api/bot/status in a few seconds" });
   triggerBuyAerodrome();
 });
 router2.post("/bot/sell-uniswap", (_req, res) => {
   if (!guardRunning(res)) return;
-  res.json({ message: "SELL forzato su Uniswap V3 \u2014 controlla /api/bot/status tra qualche secondo" });
+  res.json({ message: "SELL forced on Uniswap V3 \u2014 check /api/bot/status in a few seconds" });
   triggerSellUniswap();
 });
 router2.post("/bot/sell-aerodrome", (_req, res) => {
   if (!guardRunning(res)) return;
-  res.json({ message: "SELL forzato su Aerodrome V1 \u2014 controlla /api/bot/status tra qualche secondo" });
+  res.json({ message: "SELL forced on Aerodrome V1 \u2014 check /api/bot/status in a few seconds" });
   triggerSellAerodrome();
 });
 router2.post("/bot/buy-gblin", (_req, res) => {
   if (!guardRunning(res)) return;
-  res.json({ message: "BUY forzato su contratto GBLIN \u2014 controlla /api/bot/status tra qualche secondo" });
+  res.json({ message: "BUY forced on the GBLIN contract \u2014 check /api/bot/status in a few seconds" });
   triggerBuyGblinContract();
 });
 router2.post("/bot/sell-gblin", (_req, res) => {
   if (!guardRunning(res)) return;
-  res.json({ message: "SELL forzato su contratto GBLIN \u2014 controlla /api/bot/status tra qualche secondo" });
+  res.json({ message: "SELL forced on the GBLIN contract \u2014 check /api/bot/status in a few seconds" });
   triggerSellGblinContract();
 });
 router2.post("/bot/sell-all", async (_req, res) => {
@@ -53759,8 +53795,8 @@ object-assign/index.js:
 */
 
 // ─── x402 liveness watchdog (patch V-agosto-2026, speculare a src/services/bot.ts) ───
-// Blocco autonomo appeso al bundle: controlla ogni 6h che l'attestation risponda
-// 402 (paywall vivo) e il sample risponda 200; avvisa su Telegram con debounce 12h.
+// Standalone block appended to the bundle: every 6h checks that the attestation answers
+// 402 (paywall alive) and the sample answers 200; alerts on Telegram, debounced 12h.
 (() => {
   const CHECKS = [
     { url: "https://gblin.digital/api/x402/attestation",        expect: 402 },
@@ -53784,21 +53820,21 @@ object-assign/index.js:
       let fail = "";
       try {
         const res = await fetch(c.url, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(TIMEOUT_MS) });
-        if (res.status !== c.expect) fail = `HTTP ${res.status} (atteso ${c.expect})`;
+        if (res.status !== c.expect) fail = `HTTP ${res.status} (expected ${c.expect})`;
       } catch (e) { fail = e && e.message ? e.message : String(e); }
       if (fail) {
         if (!failingSince.has(c.url)) failingSince.set(c.url, now);
         const last = lastAlert.get(c.url) || 0;
         if (last === 0 || now - last >= REALERT_MS) {
           lastAlert.set(c.url, now);
-          tg(`\u{1F534} <b>x402 endpoint GI\u00d9 \u2014 watchdog Heartbeat</b>\n<code>${c.url}</code>\nEsito: ${fail}\nOgni ora di disservizio finisce nei log pubblici di chi ci compra e nei probe delle directory.`);
+          tg(`\u{1F534} <b>x402 endpoint DOWN \u2014 Heartbeat watchdog</b>\n<code>${c.url}</code>\nResult: ${fail}\nEvery hour of downtime shows up in our buyers' public logs and in directory probes.`);
         }
         console.error(`[x402-watchdog] FAIL ${c.url}: ${fail}`);
       } else {
         if (failingSince.has(c.url)) {
           const downMin = Math.round((now - failingSince.get(c.url)) / 60000);
           failingSince.delete(c.url); lastAlert.delete(c.url);
-          tg(`\u{1F7E2} <b>x402 endpoint RIPRISTINATO</b>\n<code>${c.url}</code> di nuovo vivo (gi\u00f9 ~${downMin} min).`);
+          tg(`\u{1F7E2} <b>x402 endpoint RESTORED</b>\n<code>${c.url}</code> alive again (down ~${downMin} min).`);
         }
         console.log(`[x402-watchdog] ok ${c.url}`);
       }
@@ -53807,7 +53843,7 @@ object-assign/index.js:
   }
   setTimeout(() => { run().catch(() => {}); }, 30000);
   setInterval(() => { run().catch(() => {}); }, INTERVAL_MS);
-  console.log("[x402-watchdog] avviato \u2014 attestation(402) + sample(200) ogni 6h");
+  console.log("[x402-watchdog] started \u2014 attestation(402) + sample(200) every 6h");
 })();
 
 //# sourceMappingURL=index.mjs.map
@@ -53843,26 +53879,26 @@ object-assign/index.js:
     try {
       const res = await fetch(URL, { method: "GET", signal: AbortSignal.timeout(TIMEOUT_MS) });
       if (!res.ok) {
-        problem = `HTTP ${res.status} dall'API`;
+        problem = `HTTP ${res.status} from the API`;
       } else {
         const body = await res.json();
         const stats = body && body.stats;
         if (!body || !body.enabled || !stats) {
-          problem = "l'API risponde ma non espone statistiche";
+          problem = "the API answers but exposes no stats";
         } else if (typeof stats.updated !== "number") {
-          problem = "le statistiche non hanno un timestamp";
+          problem = "the stats carry no timestamp";
         } else {
           const ageMs = now - stats.updated * 1000;
           halted = stats.halted === true;
           haltReason = stats.halt_reason || "";
           if (ageMs > STALE_MS) {
-            problem = "nessun ciclo da troppo tempo";
-            detail = `ultimo aggiornamento ${Math.round(ageMs / 60000)} min fa (cicla ogni 5 min)`;
+            problem = "no cycle for too long";
+            detail = `last update ${Math.round(ageMs / 60000)} min ago (cycles every 5 min)`;
           }
         }
       }
     } catch (e) {
-      problem = "API irraggiungibile";
+      problem = "API unreachable";
       detail = e && e.message ? e.message : String(e);
     }
 
@@ -53871,7 +53907,7 @@ object-assign/index.js:
       const downMin = Math.round((now - failingSince) / 60000);
       if (!lastAlert || now - lastAlert >= REALERT_MS) {
         lastAlert = now;
-        tg(`\u{1F534} <b>Aureus non dà segni di vita</b>\nProblema: ${problem}${detail ? "\n" + detail : ""}\n${downMin >= 1 ? `Segnalato già da ~${downMin} min.\n` : ""}\nSulla VM: <code>sudo systemctl restart aureus</code>\nSe la VM non risponde, va riavviata dalla console Oracle.\n⚠️ Con Aureus fermo la VM scende sotto la soglia CPU di Oracle: dopo 7 giorni può essere reclamata.`);
+        tg(`\u{1F534} <b>Aureus shows no sign of life</b>\nProblem: ${problem}${detail ? "\n" + detail : ""}\n${downMin >= 1 ? `Reported for ~${downMin} min.\n` : ""}\nOn the VM: <code>sudo systemctl restart aureus</code>\nIf the VM does not answer, reboot it from the Oracle console.\n⚠️ With Aureus stopped the VM drops below Oracle's CPU threshold: after 7 days it can be reclaimed.`);
       }
       console.error(`[aureus-watchdog] FAIL: ${problem} ${detail}`);
       return;
@@ -53880,15 +53916,15 @@ object-assign/index.js:
     if (failingSince) {
       const downMin = Math.round((now - failingSince) / 60000);
       failingSince = 0; lastAlert = 0;
-      tg(`\u{1F7E2} <b>Aureus è tornato</b>\nCicli di nuovo regolari (fermo ~${downMin} min).`);
+      tg(`\u{1F7E2} <b>Aureus is back</b>\nCycles regular again (stopped ~${downMin} min).`);
     }
 
     if (halted && !haltAlerted) {
       haltAlerted = true;
-      tg(`\u{1F7E0} <b>Aureus si è fermato da solo</b>\nMotivo: ${haltReason || "non dichiarato"}\nL'automa è vivo e pubblica, ma non apre posizioni finché resta in questo stato.`);
+      tg(`\u{1F7E0} <b>Aureus halted itself</b>\nReason: ${haltReason || "not stated"}\nThe agent is alive and publishing, but opens no positions while in this state.`);
     } else if (!halted && haltAlerted) {
       haltAlerted = false;
-      tg(`\u{1F7E2} <b>Aureus ha ripreso a operare</b> (non più in halt).`);
+      tg(`\u{1F7E2} <b>Aureus is trading again</b> (no longer halted).`);
     }
 
     console.log(`[aureus-watchdog] ok${halted ? " (in halt)" : ""}`);
@@ -53896,5 +53932,5 @@ object-assign/index.js:
 
   setTimeout(() => { run().catch(() => {}); }, 45000);
   setInterval(() => { run().catch(() => {}); }, INTERVAL_MS);
-  console.log("[aureus-watchdog] avviato — freschezza stats + stato halt ogni 30min");
+  console.log("[aureus-watchdog] started — stats freshness + halt state every 30min");
 })();

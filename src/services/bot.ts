@@ -18,7 +18,7 @@ import { fileURLToPath } from "url";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-// GBLIN V6 (contratto di produzione). V5 era 0x38DcDB3A381677239BBc652aed9811F2f8496345.
+// GBLIN vault in service.
 const TOKEN_ADDRESS = "0xc2181d975c05c8c724b334bcED0764c0b86B1D53" as `0x${string}`;
 const WETH_ADDRESS  = "0x4200000000000000000000000000000000000006" as `0x${string}`;
 
@@ -27,9 +27,9 @@ const UNI_ROUTER  = "0x2626664c2603336E57B271c5C0b26F421741e481" as `0x${string}
 
 /** Uniswap V3 GBLIN(V6)/WETH pool on Base — fee 0.3%. (V5 era 0x8fdda852...561617, fee 300) */
 const UNI_POOL     = "0x779C4260022bf7493d303Ff016C3C63215ee9B19" as `0x${string}`;
-const UNI_POOL_FEE = 3000; // 0.3% (tier scelto per la pool V6)
+const UNI_POOL_FEE = 3000; // 0.3% (fee tier of the pool)
 
-// Superfici del vault in servizio: i preventivi vivono sulla Lens, l'uscita in ETH sullo Zap.
+// Vault surfaces: quotes come from the Lens, the ETH exit goes through the Zap.
 const LENS_ADDRESS = "0xfCFea8027019E8551A1f09AD91532471F5D26f61" as `0x${string}`;
 const ZAP_ADDRESS = "0x0E9D6Ceb6D313b021622C121Cda9C62e86e60200" as `0x${string}`;
 const LENS_ABI = [
@@ -39,9 +39,9 @@ const LENS_ABI = [
 const ZAP_ABI = [
   { name: "sellGBLINForEth", type: "function", stateMutability: "nonpayable", inputs: [{ name: "shares", type: "uint256" }, { name: "minEthOut", type: "uint256" }, { name: "venueData", type: "bytes[]" }, { name: "receiver", type: "address" }], outputs: [{ name: "ethOut", type: "uint256" }] }
 ] as const;
-// Una voce per riga del paniere: il livello di commissione della pool su cui lo Zap vende quella gamba.
+// One entry per basket row: the fee tier of the pool the Zap sells that leg on.
 const ZAP_VENUE_DATA = ["0x00000000000000000000000000000000000000000000000000000000000001f4", "0x00000000000000000000000000000000000000000000000000000000000001f4", "0x00000000000000000000000000000000000000000000000000000000000001f4"] as `0x${string}`[];
-// L'uscita consuma circa 810.000 di gas ma pretende un limite piu' alto per la riserva dei trasferimenti.
+// The exit uses about 810,000 gas but needs a higher limit for the vault's transfer gas reserve.
 const ZAP_EXIT_GAS = 1300000n;
 
 /** Aerodrome V1 volatile pool: GBLIN(V6)/WETH. (V5 era 0x7dcd4f5b...92ae1b) */
@@ -68,11 +68,13 @@ const SELL_COOLDOWN_MS = 45 * 60 * 1000; // 45 min
 /** Sells go to the pool when its quote is within this margin of the best one (basis points). */
 const POOL_PREFERENCE_BPS = Number(process.env.POOL_PREFERENCE_BPS ?? 100);
 
-/** GBLIN contract minimum buy: 0.0005 ETH (contract enforced) */
+/** Floor the bot applies to its own contract buys: 0.0005 ETH. */
 const GBLIN_MIN_ETH_WEI = parseEther("0.0005");
 
-/** Max direct GBLIN-contract buys per calendar day (UTC). Remaining buys go to DEX pools. */
-const GBLIN_CONTRACT_DAILY_BUY_LIMIT = 1;
+/** Max direct GBLIN-contract buys per calendar day (UTC). Remaining buys go to the pool. */
+const GBLIN_CONTRACT_DAILY_BUY_LIMIT = Number(process.env.GBLIN_CONTRACT_DAILY_BUY_LIMIT ?? 1);
+/** Max contract (Zap) sells per calendar day (UTC). Remaining sells go to the pool. */
+const GBLIN_CONTRACT_DAILY_SELL_LIMIT = Number(process.env.GBLIN_CONTRACT_DAILY_SELL_LIMIT ?? 2);
 
 // ─── Buy amount presets $0.50 – $1.50 (weighted toward human-friendly values) ──
 
@@ -514,7 +516,7 @@ function getForcedBuyVenue(): "uniswap" | "aerodrome" | null {
   refreshForcedBuySlots();
   const now = Date.now();
   if (!uniswapForcedBuyDoneToday   && now >= uniswapForcedBuyTimeMs)   return "uniswap";
-  // Aerodrome: nessuna pool sul vault in servizio, la rotazione non la forza piu'.
+  // Aerodrome: no pool for the vault in service, so the rotation no longer forces it.
   return null;
 }
 
@@ -533,10 +535,32 @@ function getUtcDateKey(): string {
  * The unlock time is a random UTC timestamp between 00:00 and 23:59 of that day,
  * so the one allowed GBLIN-contract buy happens at an unpredictable moment.
  */
+// Daily counters of contract buys and sells, kept on disk so that a restart does not reset them.
+const DAILY_COUNTERS_PATH = resolve(__dirname, "../../daily-contract-counters.json");
+let gblinContractSellCountToday = 0;
+
+function loadDailyCounters(today: string): { buys: number; sells: number } {
+  try {
+    const d = JSON.parse(readFileSync(DAILY_COUNTERS_PATH, "utf8"));
+    if (d && d.day === today) return { buys: Number(d.buys) || 0, sells: Number(d.sells) || 0 };
+  } catch { /* no file yet */ }
+  return { buys: 0, sells: 0 };
+}
+
+function saveDailyCounters(): void {
+  try {
+    writeFileSync(DAILY_COUNTERS_PATH, JSON.stringify({ day: gblinContractBuyDayKey, buys: gblinContractBuyCountToday, sells: gblinContractSellCountToday }), "utf8");
+  } catch (err) {
+    logger.warn({ err }, "Could not persist the daily contract counters");
+  }
+}
+
 function refreshGblinDailySlot(): void {
   const today = getUtcDateKey();
   if (gblinContractBuyDayKey !== today) {
-    gblinContractBuyCountToday = 0;
+    const c = loadDailyCounters(today);
+    gblinContractBuyCountToday  = c.buys;
+    gblinContractSellCountToday = c.sells;
     gblinContractBuyDayKey     = today;
     const midnightMs  = new Date(today + "T00:00:00Z").getTime();
     const randomOffMs = Math.floor(Math.random() * 24 * 60 * 60 * 1000);
@@ -559,6 +583,20 @@ function isGblinContractBuyAllowed(): boolean {
 function recordGblinContractBuyUsed(): void {
   refreshGblinDailySlot();
   gblinContractBuyCountToday++;
+  saveDailyCounters();
+}
+
+/** Returns true while today's contract sells are below the daily limit. */
+function isGblinContractSellAllowed(): boolean {
+  refreshGblinDailySlot();
+  return gblinContractSellCountToday < GBLIN_CONTRACT_DAILY_SELL_LIMIT;
+}
+
+/** Call after a confirmed contract sell to consume today's quota. */
+function recordGblinContractSellUsed(): void {
+  refreshGblinDailySlot();
+  gblinContractSellCountToday++;
+  saveDailyCounters();
 }
 
 // ─── Daily forced GBLIN-contract SELL slot ────────────────────────────────────
@@ -583,7 +621,7 @@ function refreshGblinSellSlot(): void {
 
 function isGblinContractSellDue(): boolean {
   refreshGblinSellSlot();
-  return !gblinContractSellDoneToday && Date.now() >= gblinContractSellUnlockMs;
+  return !gblinContractSellDoneToday && Date.now() >= gblinContractSellUnlockMs && isGblinContractSellAllowed();
 }
 
 /**
@@ -1072,7 +1110,7 @@ async function findBestBuyVenue(ethWei: bigint, excludeGblin = false): Promise<Q
 
   const results: QuoteResult[] = [];
   if (uni.status   === "fulfilled") results.push(uni.value);
-  // Aerodrome escluso: nessuna pool sul vault in servizio.
+  // Aerodrome excluded: no pool for the vault in service.
   if (!excludeGblin && gblin?.status === "fulfilled") results.push(gblin.value);
 
   if (results.length === 0) throw new Error("All buy venues failed to quote");
@@ -1087,8 +1125,12 @@ async function findBestBuyVenue(ethWei: bigint, excludeGblin = false): Promise<Q
 
 async function findBestSellVenue(gblinWei: bigint, walletIndex?: number): Promise<QuoteResult> {
   // GBLIN contract enforces a 2-minute lock between buy and sell on the same wallet
-  const gblinLocked = walletIndex !== undefined &&
-    (Date.now() - (lastGblinBuyTimestamp.get(walletIndex) ?? 0)) < GBLIN_SELL_LOCK_MS;
+  const sellCapReached = !isGblinContractSellAllowed();
+  if (sellCapReached) {
+    logger.info({ sellsToday: gblinContractSellCountToday, limit: GBLIN_CONTRACT_DAILY_SELL_LIMIT }, "GBLIN contract daily sell limit reached – quoting the pool only");
+  }
+  const gblinLocked = sellCapReached || (walletIndex !== undefined &&
+    (Date.now() - (lastGblinBuyTimestamp.get(walletIndex) ?? 0)) < GBLIN_SELL_LOCK_MS);
 
   if (gblinLocked) {
     const secsLeft = Math.ceil((GBLIN_SELL_LOCK_MS - (Date.now() - (lastGblinBuyTimestamp.get(walletIndex!) ?? 0))) / 1000);
@@ -1103,7 +1145,7 @@ async function findBestSellVenue(gblinWei: bigint, walletIndex?: number): Promis
 
   const results: QuoteResult[] = [];
   if (uni.status   === "fulfilled") results.push(uni.value);
-  // Aerodrome escluso: nessuna pool sul vault in servizio.
+  // Aerodrome excluded: no pool for the vault in service.
   if (!gblinLocked && gblin?.status === "fulfilled") results.push(gblin.value);
 
   if (results.length === 0) throw new Error("All sell venues failed to quote");
@@ -1733,10 +1775,11 @@ async function executeSellGblinContract(
     record.ethAmount = ethReceived;
     record.usdAmount = ethReceived * ethPriceUsd;
     record.success   = true;
+    recordGblinContractSellUsed();
     lastSellTimestamp.set(wallet.index, Date.now());
     consecutiveBuys.set(wallet.index, 0);
     rollRebalanceThreshold(wallet.index);
-    logger.info({ swapHash, tokensSold: record.tokenAmount, dex: "GBLIN contract" }, "SELL GBLIN contract confirmed ✅");
+    logger.info({ swapHash, tokensSold: record.tokenAmount, dex: "GBLIN contract", gblinSellsToday: gblinContractSellCountToday }, "SELL GBLIN contract confirmed ✅");
   } catch (err) {
     record.error = (err instanceof Error ? err.message : String(err)).slice(0, 300);
     logger.error({ err }, "SELL GBLIN contract failed");
@@ -1805,8 +1848,8 @@ async function bestExecutionBuy(
   // best-execution would essentially never route here. Force exactly one direct
   // contract buy per day, at the randomized unlock slot, so on-chain `Minted`
   // activity never stalls (keeps the "contract (buy)" stream alive).
-  // Un acquisto al giorno deve passare dal contratto: il conio avviene al valore patrimoniale netto e la
-  // pool tratta quasi sempre sotto, quindi la sola miglior esecuzione non ci arriverebbe mai.
+  // One buy a day goes through the contract: it mints at net asset value while the
+  // pool usually trades below it, so best execution alone would never pick it.
   if (isGblinContractBuyAllowed()) {
     logger.info("Daily forced-buy: GBLIN contract (NAV mint) — keeping direct on-chain buys alive");
     const forced = await executeBuyGblinContract(wallet, ethPriceUsd, ethWei, usdAmount, manual);
@@ -2288,7 +2331,7 @@ async function checkX402Liveness(): Promise<void> {
         signal: AbortSignal.timeout(X402_LIVENESS_TIMEOUT_MS),
       });
       status = res.status;
-      if (status !== check.expect) failReason = `HTTP ${status} (atteso ${check.expect})`;
+      if (status !== check.expect) failReason = `HTTP ${status} (expected ${check.expect})`;
     } catch (err) {
       failReason = err instanceof Error ? err.message : String(err);
     }
@@ -2298,10 +2341,10 @@ async function checkX402Liveness(): Promise<void> {
       if (last === 0 || now - last >= X402_LIVENESS_REALERT_MS) {
         x402LastAlert.set(check.url, now);
         notifyTelegram(
-          `🔴 <b>x402 endpoint GIÙ — watchdog Heartbeat</b>\n` +
+          `🔴 <b>x402 endpoint DOWN — Heartbeat watchdog</b>\n` +
           `<code>${check.url}</code>\n` +
-          `Esito: ${failReason}\n` +
-          `Ogni ora di disservizio finisce nei log pubblici di chi ci compra e nei probe delle directory.`
+          `Result: ${failReason}\n` +
+          `Every hour of downtime shows up in our buyers' public logs and in directory probes.`
         ).catch(() => {});
       }
       logger.error({ url: check.url, failReason }, "x402 liveness check FAILED");
@@ -2311,8 +2354,8 @@ async function checkX402Liveness(): Promise<void> {
         x402FailingSince.delete(check.url);
         x402LastAlert.delete(check.url);
         notifyTelegram(
-          `🟢 <b>x402 endpoint RIPRISTINATO</b>\n` +
-          `<code>${check.url}</code> di nuovo vivo (giù ~${downMin} min).`
+          `🟢 <b>x402 endpoint RESTORED</b>\n` +
+          `<code>${check.url}</code> alive again (down ~${downMin} min).`
         ).catch(() => {});
       }
       logger.info({ url: check.url, status }, "x402 liveness ok");
@@ -2363,26 +2406,26 @@ async function checkAureusLiveness(): Promise<void> {
       signal: AbortSignal.timeout(AUREUS_WATCHDOG_TIMEOUT_MS),
     });
     if (!res.ok) {
-      problem = `HTTP ${res.status} dall'API`;
+      problem = `HTTP ${res.status} from the API`;
     } else {
       const body = (await res.json()) as { enabled?: boolean; stats?: { updated?: number; halted?: boolean; halt_reason?: string; equity_usd?: number; open_count?: number } | null };
       const stats = body?.stats;
       if (!body?.enabled || !stats) {
-        problem = "l'API risponde ma non espone statistiche";
+        problem = "the API answers but exposes no stats";
       } else if (typeof stats.updated !== "number") {
-        problem = "le statistiche non hanno un timestamp";
+        problem = "the stats carry no timestamp";
       } else {
         const ageMs = now - stats.updated * 1000;
         halted     = stats.halted === true;
         haltReason = stats.halt_reason ?? "";
         if (ageMs > AUREUS_STALE_AFTER_MS) {
-          problem = "nessun ciclo da troppo tempo";
-          detail  = `ultimo aggiornamento ${Math.round(ageMs / 60_000)} min fa (cicla ogni 5 min)`;
+          problem = "no cycle for too long";
+          detail  = `last update ${Math.round(ageMs / 60_000)} min ago (cycles every 5 min)`;
         }
       }
     }
   } catch (err) {
-    problem = "API irraggiungibile";
+    problem = "API unreachable";
     detail  = err instanceof Error ? err.message : String(err);
   }
 
@@ -2395,12 +2438,12 @@ async function checkAureusLiveness(): Promise<void> {
       // first alert and would read as a contradiction next to "last update 180
       // min ago". Only worth showing once it means something.
       notifyTelegram(
-        `🔴 <b>Aureus non dà segni di vita</b>\n` +
-        `Problema: ${problem}${detail ? `\n${detail}` : ""}\n` +
-        (downMin >= 1 ? `Segnalato già da ~${downMin} min.\n` : "") +
-        `\nSulla VM: <code>sudo systemctl restart aureus</code>\n` +
-        `Se la VM non risponde, va riavviata dalla console Oracle.\n` +
-        `⚠️ Con Aureus fermo la VM scende sotto la soglia CPU di Oracle: dopo 7 giorni può essere reclamata.`
+        `🔴 <b>Aureus shows no sign of life</b>\n` +
+        `Problem: ${problem}${detail ? `\n${detail}` : ""}\n` +
+        (downMin >= 1 ? `Reported for ~${downMin} min.\n` : "") +
+        `\nOn the VM: <code>sudo systemctl restart aureus</code>\n` +
+        `If the VM does not answer, reboot it from the Oracle console.\n` +
+        `⚠️ With Aureus stopped the VM drops below Oracle's CPU threshold: after 7 days it can be reclaimed.`
       ).catch(() => {});
     }
     logger.error({ problem, detail }, "Aureus liveness check FAILED");
@@ -2412,7 +2455,7 @@ async function checkAureusLiveness(): Promise<void> {
     aureusFailingSince = 0;
     aureusLastAlert = 0;
     notifyTelegram(
-      `🟢 <b>Aureus è tornato</b>\nCicli di nuovo regolari (fermo ~${downMin} min).`
+      `🟢 <b>Aureus is back</b>\nCycles regular again (stopped ~${downMin} min).`
     ).catch(() => {});
   }
 
@@ -2421,13 +2464,13 @@ async function checkAureusLiveness(): Promise<void> {
   if (halted && !aureusHaltAlerted) {
     aureusHaltAlerted = true;
     notifyTelegram(
-      `🟠 <b>Aureus si è fermato da solo</b>\n` +
-      `Motivo: ${haltReason || "non dichiarato"}\n` +
-      `L'automa è vivo e pubblica, ma non apre posizioni finché resta in questo stato.`
+      `🟠 <b>Aureus halted itself</b>\n` +
+      `Reason: ${haltReason || "not stated"}\n` +
+      `The agent is alive and publishing, but opens no positions while in this state.`
     ).catch(() => {});
   } else if (!halted && aureusHaltAlerted) {
     aureusHaltAlerted = false;
-    notifyTelegram(`🟢 <b>Aureus ha ripreso a operare</b> (non più in halt).`).catch(() => {});
+    notifyTelegram(`🟢 <b>Aureus is trading again</b> (no longer halted).`).catch(() => {});
   }
 
   logger.info({ halted }, "Aureus liveness ok");
@@ -2451,9 +2494,9 @@ function notifyLowPool(totalUsd: number): void {
   if (now - lowPoolLastAlert < LOW_POOL_REALERT_MS) return;
   lowPoolLastAlert = now;
   notifyTelegram(
-    `⏸ <b>Bot in pausa — fondi sotto la soglia</b>\n` +
-    `Totale dei 4 wallet: <b>$${totalUsd.toFixed(2)}</b> (serve $${FUNDED_THRESHOLD_USD})\n` +
-    `Ricarica ETH su Base su un wallet qualsiasi: riparte da solo entro un minuto.`
+    `⏸ <b>Bot paused — funds below threshold</b>\n` +
+    `Total of the 4 wallets: <b>$${totalUsd.toFixed(2)}</b> (needs $${FUNDED_THRESHOLD_USD})\n` +
+    `Top up ETH on Base on any wallet: it restarts by itself within a minute.`
   ).catch(() => {});
 }
 
@@ -2461,7 +2504,7 @@ function notifyPoolRecovered(totalUsd: number): void {
   if (!lowPoolLastAlert) return;
   lowPoolLastAlert = 0;
   notifyTelegram(
-    `▶️ <b>Bot ripartito</b>\nTotale dei 4 wallet: <b>$${totalUsd.toFixed(2)}</b>.`
+    `▶️ <b>Bot ripartito</b>\nTotal of the 4 wallets: <b>$${totalUsd.toFixed(2)}</b>.`
   ).catch(() => {});
 }
 
@@ -2473,10 +2516,10 @@ function checkLowEth(wallets: WalletInfo[]): void {
       if (last === 0 || now - last >= LOW_ETH_REALERT_MS) {
         lowEthLastAlert.set(w.index, now);
         notifyTelegram(
-          `⚠️ <b>ETH basso — Heartbeat Bot (Base)</b>\n` +
+          `⚠️ <b>Low ETH — Heartbeat Bot (Base)</b>\n` +
           `Wallet W${w.index} <code>${w.address.slice(0, 12)}…</code>\n` +
-          `Saldo: <b>${w.ethBalance.toFixed(6)} ETH</b> (soglia ${LOW_ETH_ALERT_ETH})\n` +
-          `Ricarica ETH su Base: senza gas si fermano trade e keeper crash-shield.`
+          `Balance: <b>${w.ethBalance.toFixed(6)} ETH</b> (threshold ${LOW_ETH_ALERT_ETH})\n` +
+          `Top up ETH on Base: without gas, trades stop.`
         ).catch(() => {});
       }
     } else if (w.ethBalance >= LOW_ETH_ALERT_ETH * 1.5) {
@@ -2697,9 +2740,9 @@ export async function startBot() {
     startWatchdog();
     logger.info("Watchdog started — scheduler will be auto-revived if it dies");
 
-    // Keeper spento sul vault in servizio: lo scudo si aggiorna dentro conii, riscatti e riempimenti
-    // d'asta, e il ribilanciamento lo fa l'asta olandese. Il bot non lo tocca piu'.
-    logger.info("Crash-shield keeper non attivo: il ribilanciamento passa dall'asta");
+    // Keeper off for the vault in service: the shield updates inside mints, redemptions and auction
+    // fills, and rebalancing is done by the Dutch auction. The bot no longer touches it.
+    logger.info("Crash-shield keeper disabled: the auction rebalances the vault in service");
 
     startX402LivenessWatchdog();
     logger.info("x402 liveness watchdog started — attestation (402) + sample (200) every 6h");
