@@ -50980,6 +50980,7 @@ var SELL_PCT_MAX = 0.85;
 var FUNDED_THRESHOLD_USD = Number(process.env["FUNDED_THRESHOLD_USD"] ?? "10");
 var POLLING_INTERVAL_MS = 60 * 1e3;
 var SELL_COOLDOWN_MS = 45 * 60 * 1e3;
+var POOL_PREFERENCE_BPS = Number(process.env.POOL_PREFERENCE_BPS ?? 100);
 var GBLIN_MIN_ETH_WEI = parseEther("0.0005");
 var GBLIN_CONTRACT_DAILY_BUY_LIMIT = 5;
 var BUY_PRESETS = [
@@ -51718,11 +51719,20 @@ async function findBestSellVenue(gblinWei, walletIndex) {
   if (!gblinLocked && gblin?.status === "fulfilled") results.push(gblin.value);
   if (results.length === 0) throw new Error("All sell venues failed to quote");
   results.sort((a, b) => b.amountOut > a.amountOut ? 1 : -1);
+  const best = results[0];
+  const pool = results.find((r) => r.venue === "uniswap");
+  if (pool && pool !== best && pool.amountOut * 10000n >= best.amountOut * BigInt(1e4 - POOL_PREFERENCE_BPS)) {
+    logger.info(
+      { quotes: results.map((r) => `${r.label}: ${formatUnits(r.amountOut, 18)} ETH`), winner: pool.label, preferenceBps: POOL_PREFERENCE_BPS },
+      "Best execution SELL quote (pool preferred within margin)"
+    );
+    return pool;
+  }
   logger.info(
-    { quotes: results.map((r) => `${r.label}: ${formatUnits(r.amountOut, 18)} ETH`), winner: results[0].label },
+    { quotes: results.map((r) => `${r.label}: ${formatUnits(r.amountOut, 18)} ETH`), winner: best.label },
     "Best execution SELL quote"
   );
-  return results[0];
+  return best;
 }
 function encodeExactInputSingle(params) {
   return encodeFunctionData({

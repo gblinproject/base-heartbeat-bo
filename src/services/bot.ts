@@ -65,6 +65,8 @@ const POLLING_INTERVAL_MS  = 60 * 1000;
 
 /** Sell cooldown per wallet — avoids selling from the same wallet twice in a row */
 const SELL_COOLDOWN_MS = 45 * 60 * 1000; // 45 min
+/** Sells go to the pool when its quote is within this margin of the best one (basis points). */
+const POOL_PREFERENCE_BPS = Number(process.env.POOL_PREFERENCE_BPS ?? 100);
 
 /** GBLIN contract minimum buy: 0.0005 ETH (contract enforced) */
 const GBLIN_MIN_ETH_WEI = parseEther("0.0005");
@@ -1107,11 +1109,24 @@ async function findBestSellVenue(gblinWei: bigint, walletIndex?: number): Promis
   if (results.length === 0) throw new Error("All sell venues failed to quote");
 
   results.sort((a, b) => (b.amountOut > a.amountOut ? 1 : -1));
+  // Pool preference: redeeming through the vault beats the pool by roughly the pool fee, so a
+  // strict best-price rule never sells into the pool and the pool only ever sees buys. Within
+  // POOL_PREFERENCE_BPS of the best quote the pool wins, so it carries flow in both directions;
+  // beyond that margin the vault wins again, so the bot never sells well below net asset value.
+  const best = results[0]!;
+  const pool = results.find(r => r.venue === "uniswap");
+  if (pool && pool !== best && pool.amountOut * 10_000n >= best.amountOut * BigInt(10_000 - POOL_PREFERENCE_BPS)) {
+    logger.info(
+      { quotes: results.map(r => `${r.label}: ${formatUnits(r.amountOut, 18)} ETH`), winner: pool.label, preferenceBps: POOL_PREFERENCE_BPS },
+      "Best execution SELL quote (pool preferred within margin)"
+    );
+    return pool;
+  }
   logger.info(
-    { quotes: results.map(r => `${r.label}: ${formatUnits(r.amountOut, 18)} ETH`), winner: results[0]!.label },
+    { quotes: results.map(r => `${r.label}: ${formatUnits(r.amountOut, 18)} ETH`), winner: best.label },
     "Best execution SELL quote"
   );
-  return results[0]!;
+  return best;
 }
 
 // ─── Path / calldata helpers ──────────────────────────────────────────────────
