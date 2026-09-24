@@ -1838,8 +1838,8 @@ function checkLowEth(wallets: WalletInfo[]): void {
         notifyTelegram(
           `\u26a0\ufe0f <b>ETH basso \u2014 Heartbeat Bot (Base)</b>\n` +
           `Wallet W${w.index} <code>${w.address.slice(0, 12)}\u2026</code>\n` +
-          `Balance: <b>${w.ethBalance.toFixed(6)} ETH</b> (threshold ${LOW_ETH_ALERT_ETH})\n` +
-          `Top up ETH on Base: without gas, trades stop.`
+          `Saldo: <b>${w.ethBalance.toFixed(6)} ETH</b> (soglia ${LOW_ETH_ALERT_ETH})\n` +
+          `Ricarica ETH su Base: senza gas si fermano trade e keeper crash-shield.`
         ).catch(() => {});
       }
     } else if (w.ethBalance >= LOW_ETH_ALERT_ETH * 1.5) {

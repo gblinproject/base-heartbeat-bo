@@ -2331,7 +2331,7 @@ async function checkX402Liveness(): Promise<void> {
         signal: AbortSignal.timeout(X402_LIVENESS_TIMEOUT_MS),
       });
       status = res.status;
-      if (status !== check.expect) failReason = `HTTP ${status} (expected ${check.expect})`;
+      if (status !== check.expect) failReason = `HTTP ${status} (atteso ${check.expect})`;
     } catch (err) {
       failReason = err instanceof Error ? err.message : String(err);
     }
@@ -2341,10 +2341,10 @@ async function checkX402Liveness(): Promise<void> {
       if (last === 0 || now - last >= X402_LIVENESS_REALERT_MS) {
         x402LastAlert.set(check.url, now);
         notifyTelegram(
-          `🔴 <b>x402 endpoint DOWN — Heartbeat watchdog</b>\n` +
+          `🔴 <b>x402 endpoint GIÙ — watchdog Heartbeat</b>\n` +
           `<code>${check.url}</code>\n` +
-          `Result: ${failReason}\n` +
-          `Every hour of downtime shows up in our buyers' public logs and in directory probes.`
+          `Esito: ${failReason}\n` +
+          `Ogni ora di disservizio finisce nei log pubblici di chi ci compra e nei probe delle directory.`
         ).catch(() => {});
       }
       logger.error({ url: check.url, failReason }, "x402 liveness check FAILED");
@@ -2354,8 +2354,8 @@ async function checkX402Liveness(): Promise<void> {
         x402FailingSince.delete(check.url);
         x402LastAlert.delete(check.url);
         notifyTelegram(
-          `🟢 <b>x402 endpoint RESTORED</b>\n` +
-          `<code>${check.url}</code> alive again (down ~${downMin} min).`
+          `🟢 <b>x402 endpoint RIPRISTINATO</b>\n` +
+          `<code>${check.url}</code> di nuovo vivo (giù ~${downMin} min).`
         ).catch(() => {});
       }
       logger.info({ url: check.url, status }, "x402 liveness ok");
@@ -2406,26 +2406,26 @@ async function checkAureusLiveness(): Promise<void> {
       signal: AbortSignal.timeout(AUREUS_WATCHDOG_TIMEOUT_MS),
     });
     if (!res.ok) {
-      problem = `HTTP ${res.status} from the API`;
+      problem = `HTTP ${res.status} dall'API`;
     } else {
       const body = (await res.json()) as { enabled?: boolean; stats?: { updated?: number; halted?: boolean; halt_reason?: string; equity_usd?: number; open_count?: number } | null };
       const stats = body?.stats;
       if (!body?.enabled || !stats) {
-        problem = "the API answers but exposes no stats";
+        problem = "l'API risponde ma non espone statistiche";
       } else if (typeof stats.updated !== "number") {
-        problem = "the stats carry no timestamp";
+        problem = "le statistiche non hanno un timestamp";
       } else {
         const ageMs = now - stats.updated * 1000;
         halted     = stats.halted === true;
         haltReason = stats.halt_reason ?? "";
         if (ageMs > AUREUS_STALE_AFTER_MS) {
-          problem = "no cycle for too long";
-          detail  = `last update ${Math.round(ageMs / 60_000)} min ago (cycles every 5 min)`;
+          problem = "nessun ciclo da troppo tempo";
+          detail  = `ultimo aggiornamento ${Math.round(ageMs / 60_000)} min fa (cicla ogni 5 min)`;
         }
       }
     }
   } catch (err) {
-    problem = "API unreachable";
+    problem = "API irraggiungibile";
     detail  = err instanceof Error ? err.message : String(err);
   }
 
@@ -2438,12 +2438,12 @@ async function checkAureusLiveness(): Promise<void> {
       // first alert and would read as a contradiction next to "last update 180
       // min ago". Only worth showing once it means something.
       notifyTelegram(
-        `🔴 <b>Aureus shows no sign of life</b>\n` +
-        `Problem: ${problem}${detail ? `\n${detail}` : ""}\n` +
-        (downMin >= 1 ? `Reported for ~${downMin} min.\n` : "") +
-        `\nOn the VM: <code>sudo systemctl restart aureus</code>\n` +
-        `If the VM does not answer, reboot it from the Oracle console.\n` +
-        `⚠️ With Aureus stopped the VM drops below Oracle's CPU threshold: after 7 days it can be reclaimed.`
+        `🔴 <b>Aureus non dà segni di vita</b>\n` +
+        `Problema: ${problem}${detail ? `\n${detail}` : ""}\n` +
+        (downMin >= 1 ? `Segnalato già da ~${downMin} min.\n` : "") +
+        `\nSulla VM: <code>sudo systemctl restart aureus</code>\n` +
+        `Se la VM non risponde, va riavviata dalla console Oracle.\n` +
+        `⚠️ Con Aureus fermo la VM scende sotto la soglia CPU di Oracle: dopo 7 giorni può essere reclamata.`
       ).catch(() => {});
     }
     logger.error({ problem, detail }, "Aureus liveness check FAILED");
@@ -2455,7 +2455,7 @@ async function checkAureusLiveness(): Promise<void> {
     aureusFailingSince = 0;
     aureusLastAlert = 0;
     notifyTelegram(
-      `🟢 <b>Aureus is back</b>\nCycles regular again (stopped ~${downMin} min).`
+      `🟢 <b>Aureus è tornato</b>\nCicli di nuovo regolari (fermo ~${downMin} min).`
     ).catch(() => {});
   }
 
@@ -2464,13 +2464,13 @@ async function checkAureusLiveness(): Promise<void> {
   if (halted && !aureusHaltAlerted) {
     aureusHaltAlerted = true;
     notifyTelegram(
-      `🟠 <b>Aureus halted itself</b>\n` +
-      `Reason: ${haltReason || "not stated"}\n` +
-      `The agent is alive and publishing, but opens no positions while in this state.`
+      `🟠 <b>Aureus si è fermato da solo</b>\n` +
+      `Motivo: ${haltReason || "non dichiarato"}\n` +
+      `L'automa è vivo e pubblica, ma non apre posizioni finché resta in questo stato.`
     ).catch(() => {});
   } else if (!halted && aureusHaltAlerted) {
     aureusHaltAlerted = false;
-    notifyTelegram(`🟢 <b>Aureus is trading again</b> (no longer halted).`).catch(() => {});
+    notifyTelegram(`🟢 <b>Aureus ha ripreso a operare</b> (non più in halt).`).catch(() => {});
   }
 
   logger.info({ halted }, "Aureus liveness ok");
@@ -2494,9 +2494,9 @@ function notifyLowPool(totalUsd: number): void {
   if (now - lowPoolLastAlert < LOW_POOL_REALERT_MS) return;
   lowPoolLastAlert = now;
   notifyTelegram(
-    `⏸ <b>Bot paused — funds below threshold</b>\n` +
-    `Total of the 4 wallets: <b>$${totalUsd.toFixed(2)}</b> (needs $${FUNDED_THRESHOLD_USD})\n` +
-    `Top up ETH on Base on any wallet: it restarts by itself within a minute.`
+    `⏸ <b>Bot in pausa — fondi sotto la soglia</b>\n` +
+    `Totale dei 4 wallet: <b>$${totalUsd.toFixed(2)}</b> (serve $${FUNDED_THRESHOLD_USD})\n` +
+    `Ricarica ETH su Base su un wallet qualsiasi: riparte da solo entro un minuto.`
   ).catch(() => {});
 }
 
@@ -2516,10 +2516,10 @@ function checkLowEth(wallets: WalletInfo[]): void {
       if (last === 0 || now - last >= LOW_ETH_REALERT_MS) {
         lowEthLastAlert.set(w.index, now);
         notifyTelegram(
-          `⚠️ <b>Low ETH — Heartbeat Bot (Base)</b>\n` +
+          `⚠️ <b>ETH basso — Heartbeat Bot (Base)</b>\n` +
           `Wallet W${w.index} <code>${w.address.slice(0, 12)}…</code>\n` +
-          `Balance: <b>${w.ethBalance.toFixed(6)} ETH</b> (threshold ${LOW_ETH_ALERT_ETH})\n` +
-          `Top up ETH on Base: without gas, trades stop.`
+          `Saldo: <b>${w.ethBalance.toFixed(6)} ETH</b> (soglia ${LOW_ETH_ALERT_ETH})\n` +
+          `Ricarica ETH su Base: senza gas si fermano trade e keeper crash-shield.`
         ).catch(() => {});
       }
     } else if (w.ethBalance >= LOW_ETH_ALERT_ETH * 1.5) {

@@ -52735,9 +52735,9 @@ function notifyLowPool(totalUsd) {
   if (now - lowPoolLastAlert < LOW_POOL_REALERT_MS) return;
   lowPoolLastAlert = now;
   notifyTelegram(
-    `\u23f8 <b>Bot paused \u2014 funds below threshold</b>\n` +
-    `Total of the 4 wallets: <b>$${totalUsd.toFixed(2)}</b> (needs $${FUNDED_THRESHOLD_USD})\n` +
-    `Top up ETH on Base on any wallet: it restarts by itself within a minute.`
+    `\u23f8 <b>Bot in pausa \u2014 fondi sotto la soglia</b>\n` +
+    `Totale dei 4 wallet: <b>$${totalUsd.toFixed(2)}</b> (serve $${FUNDED_THRESHOLD_USD})\n` +
+    `Ricarica ETH su Base su un wallet qualsiasi: riparte da solo entro un minuto.`
   ).catch(() => {});
 }
 function notifyPoolRecovered(totalUsd) {
@@ -52753,10 +52753,10 @@ function checkLowEth(wallets) {
       if (last === 0 || now - last >= LOW_ETH_REALERT_MS) {
         lowEthLastAlert.set(w.index, now);
         notifyTelegram(
-          `\u26a0\ufe0f <b>Low ETH \u2014 Heartbeat Bot (Base)</b>\n` +
+          `\u26a0\ufe0f <b>ETH basso \u2014 Heartbeat Bot (Base)</b>\n` +
           `Wallet W${w.index} <code>${w.address.slice(0, 12)}\u2026</code>\n` +
-          `Balance: <b>${w.ethBalance.toFixed(6)} ETH</b> (threshold ${LOW_ETH_ALERT_ETH})\n` +
-          `Top up ETH on Base: without gas, trades stop.`
+          `Saldo: <b>${w.ethBalance.toFixed(6)} ETH</b> (soglia ${LOW_ETH_ALERT_ETH})\n` +
+          `Ricarica ETH su Base: senza gas si fermano trade e keeper crash-shield.`
         ).catch(() => {});
       }
     } else if (w.ethBalance >= LOW_ETH_ALERT_ETH * 1.5) {
@@ -53820,21 +53820,21 @@ object-assign/index.js:
       let fail = "";
       try {
         const res = await fetch(c.url, { method: "GET", redirect: "manual", signal: AbortSignal.timeout(TIMEOUT_MS) });
-        if (res.status !== c.expect) fail = `HTTP ${res.status} (expected ${c.expect})`;
+        if (res.status !== c.expect) fail = `HTTP ${res.status} (atteso ${c.expect})`;
       } catch (e) { fail = e && e.message ? e.message : String(e); }
       if (fail) {
         if (!failingSince.has(c.url)) failingSince.set(c.url, now);
         const last = lastAlert.get(c.url) || 0;
         if (last === 0 || now - last >= REALERT_MS) {
           lastAlert.set(c.url, now);
-          tg(`\u{1F534} <b>x402 endpoint DOWN \u2014 Heartbeat watchdog</b>\n<code>${c.url}</code>\nResult: ${fail}\nEvery hour of downtime shows up in our buyers' public logs and in directory probes.`);
+          tg(`\u{1F534} <b>x402 endpoint GI\u00d9 \u2014 watchdog Heartbeat</b>\n<code>${c.url}</code>\nEsito: ${fail}\nOgni ora di disservizio finisce nei log pubblici di chi ci compra e nei probe delle directory.`);
         }
         console.error(`[x402-watchdog] FAIL ${c.url}: ${fail}`);
       } else {
         if (failingSince.has(c.url)) {
           const downMin = Math.round((now - failingSince.get(c.url)) / 60000);
           failingSince.delete(c.url); lastAlert.delete(c.url);
-          tg(`\u{1F7E2} <b>x402 endpoint RESTORED</b>\n<code>${c.url}</code> alive again (down ~${downMin} min).`);
+          tg(`\u{1F7E2} <b>x402 endpoint RIPRISTINATO</b>\n<code>${c.url}</code> di nuovo vivo (giù ~${downMin} min).`);
         }
         console.log(`[x402-watchdog] ok ${c.url}`);
       }
@@ -53879,26 +53879,26 @@ object-assign/index.js:
     try {
       const res = await fetch(URL, { method: "GET", signal: AbortSignal.timeout(TIMEOUT_MS) });
       if (!res.ok) {
-        problem = `HTTP ${res.status} from the API`;
+        problem = `HTTP ${res.status} dall'API`;
       } else {
         const body = await res.json();
         const stats = body && body.stats;
         if (!body || !body.enabled || !stats) {
-          problem = "the API answers but exposes no stats";
+          problem = "l'API risponde ma non espone statistiche";
         } else if (typeof stats.updated !== "number") {
-          problem = "the stats carry no timestamp";
+          problem = "le statistiche non hanno un timestamp";
         } else {
           const ageMs = now - stats.updated * 1000;
           halted = stats.halted === true;
           haltReason = stats.halt_reason || "";
           if (ageMs > STALE_MS) {
-            problem = "no cycle for too long";
-            detail = `last update ${Math.round(ageMs / 60000)} min ago (cycles every 5 min)`;
+            problem = "nessun ciclo da troppo tempo";
+            detail = `ultimo aggiornamento ${Math.round(ageMs / 60000)} min fa (cicla ogni 5 min)`;
           }
         }
       }
     } catch (e) {
-      problem = "API unreachable";
+      problem = "API irraggiungibile";
       detail = e && e.message ? e.message : String(e);
     }
 
@@ -53907,7 +53907,7 @@ object-assign/index.js:
       const downMin = Math.round((now - failingSince) / 60000);
       if (!lastAlert || now - lastAlert >= REALERT_MS) {
         lastAlert = now;
-        tg(`\u{1F534} <b>Aureus shows no sign of life</b>\nProblem: ${problem}${detail ? "\n" + detail : ""}\n${downMin >= 1 ? `Reported for ~${downMin} min.\n` : ""}\nOn the VM: <code>sudo systemctl restart aureus</code>\nIf the VM does not answer, reboot it from the Oracle console.\n⚠️ With Aureus stopped the VM drops below Oracle's CPU threshold: after 7 days it can be reclaimed.`);
+        tg(`\u{1F534} <b>Aureus non dà segni di vita</b>\nProblema: ${problem}${detail ? "\n" + detail : ""}\n${downMin >= 1 ? `Segnalato già da ~${downMin} min.\n` : ""}\nSulla VM: <code>sudo systemctl restart aureus</code>\nSe la VM non risponde, va riavviata dalla console Oracle.\n⚠️ Con Aureus fermo la VM scende sotto la soglia CPU di Oracle: dopo 7 giorni può essere reclamata.`);
       }
       console.error(`[aureus-watchdog] FAIL: ${problem} ${detail}`);
       return;
@@ -53916,15 +53916,15 @@ object-assign/index.js:
     if (failingSince) {
       const downMin = Math.round((now - failingSince) / 60000);
       failingSince = 0; lastAlert = 0;
-      tg(`\u{1F7E2} <b>Aureus is back</b>\nCycles regular again (stopped ~${downMin} min).`);
+      tg(`\u{1F7E2} <b>Aureus è tornato</b>\nCicli di nuovo regolari (fermo ~${downMin} min).`);
     }
 
     if (halted && !haltAlerted) {
       haltAlerted = true;
-      tg(`\u{1F7E0} <b>Aureus halted itself</b>\nReason: ${haltReason || "not stated"}\nThe agent is alive and publishing, but opens no positions while in this state.`);
+      tg(`\u{1F7E0} <b>Aureus si è fermato da solo</b>\nMotivo: ${haltReason || "non dichiarato"}\nL'automa è vivo e pubblica, ma non apre posizioni finché resta in questo stato.`);
     } else if (!halted && haltAlerted) {
       haltAlerted = false;
-      tg(`\u{1F7E2} <b>Aureus is trading again</b> (no longer halted).`);
+      tg(`\u{1F7E2} <b>Aureus ha ripreso a operare</b> (non più in halt).`);
     }
 
     console.log(`[aureus-watchdog] ok${halted ? " (in halt)" : ""}`);
